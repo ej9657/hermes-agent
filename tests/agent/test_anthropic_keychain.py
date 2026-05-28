@@ -108,22 +108,22 @@ class TestReadClaudeCodeCredentialsPriority:
             }
         }))
         monkeypatch.setattr("agent.anthropic_adapter.Path.home", lambda: tmp_path)
+        monkeypatch.setattr(
+            "agent.anthropic_adapter.os.path.expanduser",
+            lambda value: str(tmp_path) if value == "~" else value,
+        )
 
-        # Mock Keychain to return a "newer" token
-        with patch("agent.anthropic_adapter.platform.system", return_value="Darwin"), \
-             patch("agent.anthropic_adapter.subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(
-                returncode=0,
-                stdout=json.dumps({
-                    "claudeAiOauth": {
-                        "accessToken": "keychain-token",
-                        "refreshToken": "keychain-refresh",
-                        "expiresAt": 9999999999999,
-                    }
-                }),
-                stderr="",
-            )
-            creds = read_claude_code_credentials()
+        monkeypatch.setattr(
+            "agent.anthropic_adapter._read_claude_code_credentials_from_keychain",
+            lambda: {
+                "accessToken": "keychain-token",
+                "refreshToken": "keychain-refresh",
+                "expiresAt": 9999999999999,
+                "source": "macos_keychain",
+            },
+        )
+
+        creds = read_claude_code_credentials()
 
         # Keychain token should be returned, not JSON file token
         assert creds is not None
@@ -142,12 +142,16 @@ class TestReadClaudeCodeCredentialsPriority:
             }
         }))
         monkeypatch.setattr("agent.anthropic_adapter.Path.home", lambda: tmp_path)
+        monkeypatch.setattr(
+            "agent.anthropic_adapter.os.path.expanduser",
+            lambda value: str(tmp_path) if value == "~" else value,
+        )
 
-        with patch("agent.anthropic_adapter.platform.system", return_value="Darwin"), \
-             patch("agent.anthropic_adapter.subprocess.run") as mock_run:
-            # Simulate Keychain entry not found
-            mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="")
-            creds = read_claude_code_credentials()
+        monkeypatch.setattr(
+            "agent.anthropic_adapter._read_claude_code_credentials_from_keychain",
+            lambda: None,
+        )
+        creds = read_claude_code_credentials()
 
         assert creds is not None
         assert creds["accessToken"] == "json-fallback-token"
@@ -156,10 +160,15 @@ class TestReadClaudeCodeCredentialsPriority:
     def test_returns_none_when_neither_keychain_nor_json_has_creds(self, tmp_path, monkeypatch):
         """No credentials anywhere — must return None cleanly."""
         monkeypatch.setattr("agent.anthropic_adapter.Path.home", lambda: tmp_path)
+        monkeypatch.setattr(
+            "agent.anthropic_adapter.os.path.expanduser",
+            lambda value: str(tmp_path) if value == "~" else value,
+        )
 
-        with patch("agent.anthropic_adapter.platform.system", return_value="Darwin"), \
-             patch("agent.anthropic_adapter.subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="")
-            creds = read_claude_code_credentials()
+        monkeypatch.setattr(
+            "agent.anthropic_adapter._read_claude_code_credentials_from_keychain",
+            lambda: None,
+        )
+        creds = read_claude_code_credentials()
 
         assert creds is None

@@ -422,7 +422,6 @@ def _seed_supervise_skeleton(svc_dir: Path) -> None:
         if path.exists():
             return
         path.mkdir(parents=False, exist_ok=False)
-        path.chmod(mode)
         try:
             os.chown(path, _HERMES_UID, _HERMES_GID)
         except PermissionError:
@@ -431,6 +430,7 @@ def _seed_supervise_skeleton(svc_dir: Path) -> None:
             # swallowing this keeps both root and unprivileged callers
             # on one code path.
             pass
+        path.chmod(mode)
 
     # Top-level event/ dir (this is the s6-svlisten1 event-subscription
     # dir at the service root, distinct from supervise/event/).

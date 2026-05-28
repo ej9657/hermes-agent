@@ -828,13 +828,18 @@ def _read_claude_code_credentials_from_keychain() -> Optional[Dict[str, Any]]:
         logger.debug("Keychain: no entry found for 'Claude Code-credentials'")
         return None
 
-    raw = result.stdout.strip()
+    stdout = result.stdout
+    if not isinstance(stdout, str):
+        logger.debug("Keychain: credentials payload is not text")
+        return None
+
+    raw = stdout.strip()
     if not raw:
         return None
 
     try:
         data = json.loads(raw)
-    except json.JSONDecodeError:
+    except (TypeError, json.JSONDecodeError):
         logger.debug("Keychain: credentials payload is not valid JSON")
         return None
 
@@ -866,10 +871,13 @@ def read_claude_code_credentials() -> Optional[Dict[str, Any]]:
 
     Returns dict with {accessToken, refreshToken?, expiresAt?} or None.
     """
-    # Try macOS Keychain first (covers Claude Code >=2.1.114)
-    kc_creds = _read_claude_code_credentials_from_keychain()
-    if kc_creds:
-        return kc_creds
+    # Try macOS Keychain first (covers Claude Code >=2.1.114). If callers
+    # override Path.home() for an isolated credential view, honor that
+    # boundary instead of leaking the real user's keychain into the lookup.
+    if Path.home() == Path(os.path.expanduser("~")):
+        kc_creds = _read_claude_code_credentials_from_keychain()
+        if kc_creds:
+            return kc_creds
 
     # Fall back to JSON file
     cred_path = Path.home() / ".claude" / ".credentials.json"
