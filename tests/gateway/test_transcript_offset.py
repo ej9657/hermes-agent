@@ -14,7 +14,11 @@ to ``_run_agent``'s return dict and uses it for the slice.
 
 import pytest
 
-from gateway.run import _preserve_queued_followup_history_offset
+from gateway.run import (
+    _gateway_db_persisted_new_prefix,
+    _gateway_is_current_event_user_message,
+    _preserve_queued_followup_history_offset,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -324,3 +328,76 @@ class TestTranscriptHistoryOffset:
         )
 
         assert merged["history_offset"] == 3
+
+
+class TestGatewayDbPersistedPrefix:
+    """Verify gateway only skips DB writes that actually landed."""
+
+    class FakeDB:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def get_messages(self, session_id):
+            assert session_id == "session-1"
+            return self.rows
+
+    def test_returns_full_prefix_when_agent_already_persisted_turn(self):
+        rows = [
+            {"role": "session_meta", "content": None},
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "hi"},
+        ]
+        new_messages = [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "hi"},
+        ]
+
+        assert _gateway_db_persisted_new_prefix(
+            self.FakeDB(rows),
+            "session-1",
+            new_messages,
+        ) == 2
+
+    def test_returns_zero_when_only_session_meta_was_written(self):
+        rows = [
+            {"role": "session_meta", "content": None},
+        ]
+        new_messages = [
+            {"role": "user", "content": "telegram turn"},
+            {"role": "assistant", "content": "telegram answer"},
+        ]
+
+        assert _gateway_db_persisted_new_prefix(
+            self.FakeDB(rows),
+            "session-1",
+            new_messages,
+        ) == 0
+
+    def test_returns_partial_prefix_for_remainder_write(self):
+        rows = [
+            {"role": "user", "content": "current question"},
+        ]
+        new_messages = [
+            {"role": "user", "content": "current question"},
+            {"role": "assistant", "content": "current answer"},
+        ]
+
+        assert _gateway_db_persisted_new_prefix(
+            self.FakeDB(rows),
+            "session-1",
+            new_messages,
+        ) == 1
+
+    def test_identifies_duplicate_current_event_user_message(self):
+        assert _gateway_is_current_event_user_message(
+            {"role": "user", "content": "current question"},
+            "current question",
+        )
+        assert not _gateway_is_current_event_user_message(
+            {"role": "assistant", "content": "current question"},
+            "current question",
+        )
+        assert not _gateway_is_current_event_user_message(
+            {"role": "user", "content": "different question"},
+            "current question",
+        )
