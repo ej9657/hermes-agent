@@ -7661,6 +7661,9 @@ class GatewayRunner:
         if canonical == "kanban":
             return await self._handle_kanban_command(event)
 
+        if canonical == "tctx":
+            return await self._handle_tctx_command(event)
+
         if canonical == "retry":
             return await self._handle_retry_command(event)
         
@@ -9817,6 +9820,33 @@ class GatewayRunner:
         if len(output) > 3800:
             output = output[:3800] + "\n" + t("gateway.kanban.truncated_suffix")
         return output or t("gateway.kanban.no_output")
+
+    async def _handle_tctx_command(self, event: MessageEvent) -> str:
+        """Handle /tctx — read-only Telegram context and routing lookup."""
+        import asyncio
+        from hermes_cli.telegram_context import run_tctx
+
+        source = event.source
+        default_chat_id = ""
+        default_chat_name = ""
+        try:
+            if source and source.platform and source.platform.value == "telegram":
+                default_chat_id = str(source.chat_id or "")
+                default_chat_name = str(source.chat_name or "")
+        except Exception:
+            pass
+
+        raw_args = event.get_command_args().strip()
+        try:
+            return await asyncio.to_thread(
+                run_tctx,
+                raw_args,
+                default_chat_id=default_chat_id,
+                default_chat_name=default_chat_name,
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("/tctx failed: %s", exc)
+            return f"Could not load Telegram context: {exc}"
 
     async def _handle_status_command(self, event: MessageEvent) -> str:
         """Handle /status command."""
