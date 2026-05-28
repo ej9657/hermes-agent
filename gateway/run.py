@@ -14489,6 +14489,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         if canonical == "kanban":
             return await self._handle_kanban_command(event)
 
+        if canonical == "tctx":
+            return await self._handle_tctx_command(event)
+
         if canonical == "suggestions":
             return await self._handle_suggestions_command(event)
 
@@ -17652,6 +17655,34 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
 
 
+
+    async def _handle_tctx_command(self, event: MessageEvent) -> str:
+        """Handle /tctx — read-only Telegram context and routing lookup."""
+        import asyncio
+
+        from hermes_cli.telegram_context import run_tctx
+
+        source = event.source
+        default_chat_id = ""
+        default_chat_name = ""
+        try:
+            if source and source.platform and source.platform.value == "telegram":
+                default_chat_id = str(source.chat_id or "")
+                default_chat_name = str(source.chat_name or "")
+        except Exception:
+            pass
+
+        raw_args = event.get_command_args().strip()
+        try:
+            return await asyncio.to_thread(
+                run_tctx,
+                raw_args,
+                default_chat_id=default_chat_id,
+                default_chat_name=default_chat_name,
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("/tctx failed: %s", exc)
+            return f"Could not load Telegram context: {exc}"
 
     def _sibling_thread_run_keys(self, source: SessionSource, own_key: str) -> list:
         """Find running-agent keys for OTHER participants in the same thread.
