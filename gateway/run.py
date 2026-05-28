@@ -644,6 +644,79 @@ def _wrap_current_message_with_observed_context(message: Any, observed_context: 
     return message
 
 
+def _gateway_db_compare_value(value: Any) -> str:
+    """Normalize transcript fields for best-effort duplicate detection."""
+
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list)):
+        try:
+            return json.dumps(value, sort_keys=True, ensure_ascii=False)
+        except (TypeError, ValueError):
+            return str(value)
+    return str(value)
+
+
+def _gateway_db_message_matches(row: Dict[str, Any], msg: Dict[str, Any]) -> bool:
+    """Return whether a persisted DB row represents the same replay message."""
+
+    if row.get("role") != msg.get("role"):
+        return False
+    if _gateway_db_compare_value(row.get("content")) != _gateway_db_compare_value(msg.get("content")):
+        return False
+    for key in ("tool_name", "tool_call_id", "tool_calls"):
+        if _gateway_db_compare_value(row.get(key)) != _gateway_db_compare_value(msg.get(key)):
+            return False
+    return True
+
+
+def _gateway_is_current_event_user_message(msg: Dict[str, Any], message_text: Any) -> bool:
+    """Return whether ``msg`` is the live platform user event for this turn."""
+
+    return (
+        msg.get("role") == "user"
+        and _gateway_db_compare_value(msg.get("content")) == _gateway_db_compare_value(message_text)
+    )
+
+
+def _gateway_db_persisted_new_prefix(
+    session_db: Any,
+    session_id: str,
+    new_messages: List[Dict[str, Any]],
+) -> int:
+    """Return how many current-turn messages already reached ``state.db``.
+
+    The gateway normally lets ``AIAgent`` persist new messages to SQLite, then
+    mirrors them to the JSON transcript with ``skip_db=True`` to avoid duplicate
+    rows.  Some gateway transports can return messages without the agent flush
+    having actually landed.  This guard checks the DB tail before skipping the
+    gateway write, so Telegram turns do not disappear from durable history.
+    """
+
+    expected = [msg for msg in (new_messages or []) if msg.get("role") != "system"]
+    if not session_db or not session_id or not expected:
+        return 0
+    try:
+        rows = session_db.get_messages(session_id)
+    except Exception as exc:
+        logger.debug("Gateway DB persistence check failed for %s: %s", session_id, exc)
+        return 0
+
+    persisted = [
+        row for row in rows
+        if row.get("role") not in {"session_meta", "system"}
+    ]
+    max_prefix = min(len(expected), len(persisted))
+    for count in range(max_prefix, 0, -1):
+        tail = persisted[-count:]
+        if all(
+            _gateway_db_message_matches(row, msg)
+            for row, msg in zip(tail, expected[:count])
+        ):
+            return count
+    return 0
+
+
 def _last_transcript_timestamp(history: Optional[List[Dict[str, Any]]]) -> Any:
     """Return the ``timestamp`` of the last usable transcript row, if any.
 
@@ -9288,6 +9361,35 @@ class GatewayRunner:
                 )
 
             ts = datetime.now().isoformat()
+            new_messages: List[Dict[str, Any]] = []
+            persisted_new_prefix = 0
+            if not is_context_overflow_failure and not agent_failed_early:
+                history_len = agent_result.get("history_offset", len(history))
+                new_messages = (
+                    agent_messages[history_len:]
+                    if len(agent_messages) > history_len
+                    else []
+                )
+                persisted_new_prefix = _gateway_db_persisted_new_prefix(
+                    self._session_db,
+                    session_entry.session_id,
+                    new_messages,
+                )
+                if persisted_new_prefix and persisted_new_prefix < len(new_messages):
+                    logger.info(
+                        "Gateway transcript persistence: session %s has %d/%d "
+                        "current-turn message(s) already in DB; gateway will "
+                        "write the remainder.",
+                        session_entry.session_id,
+                        persisted_new_prefix,
+                        len([m for m in new_messages if m.get("role") != "system"]),
+                    )
+                elif not persisted_new_prefix and new_messages and self._session_db is not None:
+                    logger.info(
+                        "Gateway transcript persistence: current turn for session "
+                        "%s was not found in DB; gateway will write it.",
+                        session_entry.session_id,
+                    )
             
             # If this is a fresh session (no history), write the full tool
             # definitions as the first entry so the transcript is self-describing
@@ -9326,9 +9428,6 @@ class GatewayRunner:
                     _user_entry,
                 )
             else:
-                history_len = agent_result.get("history_offset", len(history))
-                new_messages = agent_messages[history_len:] if len(agent_messages) > history_len else []
-
                 # If no new messages found (edge case), fall back to simple user/assistant
                 if not new_messages:
                     _user_entry = {"role": "user", "content": message_text, "timestamp": ts}
@@ -9344,20 +9443,34 @@ class GatewayRunner:
                             {"role": "assistant", "content": response, "timestamp": ts}
                         )
                 else:
-                    # The agent already persisted these messages to SQLite via
-                    # _flush_messages_to_session_db(), so skip the DB write here
-                    # to prevent the duplicate-write bug (#860).  We still write
-                    # to JSONL for backward compatibility and as a backup.
-                    agent_persisted = self._session_db is not None
+                    # If the agent already persisted these messages to SQLite via
+                    # _flush_messages_to_session_db(), skip the DB write for the
+                    # matched prefix to prevent the duplicate-write bug (#860).
+                    # If the DB tail does not contain the current turn, let the
+                    # gateway write it so Telegram/gateway transcripts remain
+                    # durable even when agent-side persistence is bypassed.
                     # Attach the inbound platform message_id to the first user
                     # entry written this turn so platform-level quote-resolution
                     # (e.g. Yuanbao QuoteContextMiddleware's transcript fallback)
                     # can find earlier @bot messages by their original message_id.
                     _user_msg_id_attached = False
+                    _current_event_user_seen = False
+                    persisted_idx = 0
                     for msg in new_messages:
                         # Skip system messages (they're rebuilt each run)
                         if msg.get("role") == "system":
                             continue
+                        if _gateway_is_current_event_user_message(msg, message_text):
+                            if _current_event_user_seen:
+                                logger.info(
+                                    "Gateway transcript persistence: skipping "
+                                    "duplicate current user message for session %s.",
+                                    session_entry.session_id,
+                                )
+                                continue
+                            _current_event_user_seen = True
+                        already_persisted = persisted_idx < persisted_new_prefix
+                        persisted_idx += 1
                         # Add timestamp to each message for debugging
                         entry = {**msg, "timestamp": ts}
                         if (
@@ -9370,7 +9483,7 @@ class GatewayRunner:
                             _user_msg_id_attached = True
                         self.session_store.append_to_transcript(
                             session_entry.session_id, entry,
-                            skip_db=agent_persisted,
+                            skip_db=already_persisted,
                         )
             
             # Token counts and model are now persisted by the agent directly.
