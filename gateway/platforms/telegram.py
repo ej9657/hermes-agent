@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import os
+import subprocess
 import tempfile
 import html as _html
 import re
@@ -2414,15 +2415,101 @@ class TelegramAdapter(BasePlatformAdapter):
             if not os.path.exists(video_path):
                 return SendResult(success=False, error=self._missing_media_path_error("Video", video_path))
 
+            video_kwargs: Dict[str, Any] = {"supports_streaming": True}
+            thumb_path: Optional[str] = None
+            try:
+                probe_cmd = [
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-select_streams",
+                    "v:0",
+                    "-show_entries",
+                    "stream=width,height,duration:format=duration",
+                    "-of",
+                    "json",
+                    video_path,
+                ]
+                probe = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=10)
+                if probe.returncode == 0 and probe.stdout:
+                    info = json.loads(probe.stdout)
+                    stream = (info.get("streams") or [{}])[0]
+                    width = int(stream.get("width") or 0)
+                    height = int(stream.get("height") or 0)
+                    duration_raw = stream.get("duration") or (info.get("format") or {}).get("duration")
+                    if width > 0 and height > 0:
+                        video_kwargs.update({"width": width, "height": height})
+                    if duration_raw:
+                        duration = int(round(float(duration_raw)))
+                        if duration > 0:
+                            video_kwargs["duration"] = duration
+
+                    # Telegram clients can mis-preview portrait MP4s as square/landscape
+                    # even when sendVideo receives width/height. Supplying a thumbnail with
+                    # the same portrait geometry gives Telegram an explicit poster frame to
+                    # derive the chat-bubble aspect ratio from.
+                    if width > 0 and height > 0:
+                        thumb_file = tempfile.NamedTemporaryFile(
+                            prefix="hermes_tg_video_thumb_",
+                            suffix=".jpg",
+                            delete=False,
+                        )
+                        thumb_path = thumb_file.name
+                        thumb_file.close()
+                        thumb_cmd = [
+                            "ffmpeg",
+                            "-y",
+                            "-hide_banner",
+                            "-loglevel",
+                            "error",
+                            "-ss",
+                            "1",
+                            "-i",
+                            video_path,
+                            "-frames:v",
+                            "1",
+                            "-vf",
+                            f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:black,setsar=1",
+                            "-q:v",
+                            "3",
+                            thumb_path,
+                        ]
+                        thumb = subprocess.run(thumb_cmd, capture_output=True, text=True, timeout=15)
+                        if thumb.returncode != 0 or not os.path.exists(thumb_path):
+                            logger.debug("Could not create Telegram video thumbnail for %s: %s", video_path, thumb.stderr)
+                            thumb_path = None
+            except Exception as probe_error:
+                logger.debug("Could not probe Telegram video metadata for %s: %s", video_path, probe_error)
+
             _thread = self._metadata_thread_id(metadata)
-            with open(video_path, "rb") as f:
-                msg = await self._bot.send_video(
-                    chat_id=int(chat_id),
-                    video=f,
-                    caption=caption[:1024] if caption else None,
-                    reply_to_message_id=int(reply_to) if reply_to else None,
-                    message_thread_id=self._message_thread_id_for_send(_thread),
-                )
+            try:
+                with open(video_path, "rb") as f:
+                    if thumb_path and os.path.exists(thumb_path):
+                        with open(thumb_path, "rb") as thumb_f:
+                            msg = await self._bot.send_video(
+                                chat_id=int(chat_id),
+                                video=f,
+                                thumbnail=thumb_f,
+                                caption=caption[:1024] if caption else None,
+                                reply_to_message_id=int(reply_to) if reply_to else None,
+                                message_thread_id=self._message_thread_id_for_send(_thread),
+                                **video_kwargs,
+                            )
+                    else:
+                        msg = await self._bot.send_video(
+                            chat_id=int(chat_id),
+                            video=f,
+                            caption=caption[:1024] if caption else None,
+                            reply_to_message_id=int(reply_to) if reply_to else None,
+                            message_thread_id=self._message_thread_id_for_send(_thread),
+                            **video_kwargs,
+                        )
+            finally:
+                if thumb_path:
+                    try:
+                        os.unlink(thumb_path)
+                    except OSError:
+                        pass
             return SendResult(success=True, message_id=str(msg.message_id))
         except Exception as e:
             print(f"[{self.name}] Failed to send video: {e}")
