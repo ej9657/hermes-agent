@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-05-11T16:41:16Z",
+  "updated_at": "2026-05-25T13:38:51Z",
   "metadata": {
     "source": "hermes-agent repo",
     "docs": "https://hermes-agent.nousresearch.com/docs/reference/model-catalog"
@@ -14,10 +14,6 @@
       "models": [
         {
           "id": "anthropic/claude-opus-4.7",
-          "description": ""
-        },
-        {
-          "id": "anthropic/claude-opus-4.6",
           "description": ""
         },
         {
@@ -146,9 +142,6 @@
       "models": [
         {
           "id": "anthropic/claude-opus-4.7"
-        },
-        {
-          "id": "anthropic/claude-opus-4.6"
         },
         {
           "id": "anthropic/claude-sonnet-4.6"

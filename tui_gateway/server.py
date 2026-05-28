@@ -1496,6 +1496,112 @@ def _tool_ctx(name: str, args: dict) -> str:
         return ""
 
 
+def _resolve_preview_file_path(path: str) -> str:
+    p = Path(str(path)).expanduser()
+    if not p.is_absolute():
+        p = Path(os.environ.get("TERMINAL_CWD") or os.getcwd()) / p
+    return str(p.resolve(strict=False))
+
+
+def _add_file_preview(
+    previews: list[dict[str, str]],
+    seen: set[str],
+    path: object,
+    *,
+    source: str,
+) -> None:
+    if not isinstance(path, str) or not path.strip():
+        return
+    try:
+        resolved = _resolve_preview_file_path(path)
+    except Exception:
+        resolved = path
+    if resolved in seen:
+        return
+    seen.add(resolved)
+    previews.append({
+        "path": resolved,
+        "label": Path(resolved).name or resolved,
+        "source": source,
+    })
+
+
+def _parse_json_object_prefix(result: str) -> dict | None:
+    if not isinstance(result, str):
+        return None
+    text = result.strip()
+    if not text.startswith("{"):
+        return None
+    try:
+        return json.loads(text)
+    except Exception:
+        decoder = json.JSONDecoder()
+        try:
+            data, _ = decoder.raw_decode(text)
+        except Exception:
+            return None
+        return data if isinstance(data, dict) else None
+
+
+def _extract_file_previews(
+    name: str,
+    args: dict,
+    result: str | None = None,
+) -> list[dict[str, str]]:
+    previews: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    if name in {"read_file", "write_file"}:
+        _add_file_preview(previews, seen, args.get("path"), source=name)
+    elif name == "patch":
+        _add_file_preview(previews, seen, args.get("path"), source="patch")
+        patch_text = args.get("patch")
+        if isinstance(patch_text, str):
+            for line in patch_text.splitlines():
+                prefix = "*** Update File: "
+                if line.startswith(prefix):
+                    _add_file_preview(
+                        previews,
+                        seen,
+                        line[len(prefix):].strip(),
+                        source="patch",
+                    )
+                    continue
+                prefix = "*** Add File: "
+                if line.startswith(prefix):
+                    _add_file_preview(
+                        previews,
+                        seen,
+                        line[len(prefix):].strip(),
+                        source="created",
+                    )
+
+    data = _parse_json_object_prefix(result or "")
+    if data:
+        _add_file_preview(previews, seen, data.get("path"), source=name)
+        for key, source in (
+            ("files_modified", "modified"),
+            ("files_created", "created"),
+            ("files", "found"),
+        ):
+            values = data.get(key)
+            if isinstance(values, list):
+                for value in values:
+                    _add_file_preview(previews, seen, value, source=source)
+        matches = data.get("matches")
+        if isinstance(matches, list):
+            for match in matches:
+                if isinstance(match, dict):
+                    _add_file_preview(
+                        previews,
+                        seen,
+                        match.get("path"),
+                        source="match",
+                    )
+
+    return previews[:8]
+
+
 _TUI_VERBOSE_TEXT_MAX_CHARS = 16_000
 _TUI_VERBOSE_TEXT_MAX_LINES = 240
 
@@ -1630,6 +1736,9 @@ def _on_tool_start(sid: str, tool_call_id: str, name: str, args: dict):
             "name": name,
             "context": _tool_ctx(name, args),
         }
+        file_previews = _extract_file_previews(name, args)
+        if file_previews:
+            payload["file_previews"] = file_previews
         if _session_verbose(sid):
             args_text = _tool_args_text(args)
             if args_text:
@@ -1653,6 +1762,9 @@ def _on_tool_complete(sid: str, tool_call_id: str, name: str, args: dict, result
     summary = _tool_summary(name, result, duration_s)
     if summary:
         payload["summary"] = summary
+    file_previews = _extract_file_previews(name, args, result)
+    if file_previews:
+        payload["file_previews"] = file_previews
     if _session_verbose(sid):
         result_text = _tool_result_text(result)
         if result_text:

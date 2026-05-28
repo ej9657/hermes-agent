@@ -4,9 +4,17 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  Eye,
   Zap,
 } from "lucide-react";
 import { useEffect, useState } from "react";
+import { api, type FilePreviewResponse } from "@/lib/api";
+
+export interface FilePreviewLink {
+  path: string;
+  label?: string;
+  source?: string;
+}
 
 /**
  * Expandable tool call row — the web equivalent of Ink's ToolTrail node.
@@ -31,6 +39,7 @@ export interface ToolEntry {
   summary?: string;
   error?: string;
   inline_diff?: string;
+  file_previews?: FilePreviewLink[];
   status: "running" | "done" | "error";
   startedAt: number;
   completedAt?: number;
@@ -79,7 +88,8 @@ export function ToolCall({ tool }: { tool: ToolEntry }) {
     tool.preview ||
     tool.summary ||
     tool.error ||
-    tool.inline_diff
+    tool.inline_diff ||
+    tool.file_previews?.length
   );
 
   const Chevron = open ? ChevronDown : ChevronRight;
@@ -153,6 +163,12 @@ export function ToolCall({ tool }: { tool: ToolEntry }) {
             </Section>
           )}
 
+          {!!tool.file_previews?.length && (
+            <Section label="files">
+              <FilePreviews files={tool.file_previews} />
+            </Section>
+          )}
+
           {tool.summary && (
             <Section label="result">
               <span className="text-foreground/90 whitespace-pre-wrap">
@@ -172,6 +188,167 @@ export function ToolCall({ tool }: { tool: ToolEntry }) {
       )}
     </div>
   );
+}
+
+function FilePreviews({ files }: { files: FilePreviewLink[] }) {
+  const [active, setActive] = useState<string | null>(null);
+  const [preview, setPreview] = useState<FilePreviewResponse | null>(null);
+  const [objectUrl, setObjectUrl] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [objectUrl]);
+
+  const openPreview = async (path: string) => {
+    setActive(path);
+    setLoading(true);
+    setError(null);
+    setPreview(null);
+    if (objectUrl) {
+      URL.revokeObjectURL(objectUrl);
+      setObjectUrl(null);
+    }
+
+    try {
+      const next = await api.getFilePreview(path);
+      setPreview(next);
+      if (
+        next.kind === "pdf" ||
+        next.kind === "video" ||
+        next.kind === "audio" ||
+        (next.kind === "image" && !next.data_url)
+      ) {
+        const blob = await api.getFileBlob(path);
+        setObjectUrl(URL.createObjectURL(blob));
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap gap-1.5">
+        {files.map((file) => (
+          <button
+            key={file.path}
+            type="button"
+            onClick={() => void openPreview(file.path)}
+            title={file.path}
+            className={`inline-flex max-w-full items-center gap-1 rounded border px-2 py-1 text-[0.68rem] leading-none transition ${
+              active === file.path
+                ? "border-primary/60 bg-primary/10 text-foreground"
+                : "border-border/70 bg-background/40 text-text-secondary hover:text-foreground"
+            }`}
+          >
+            <Eye className="h-3 w-3 shrink-0" />
+            <span className="truncate">{file.label || basename(file.path)}</span>
+            {file.source && (
+              <span className="text-text-tertiary">({file.source})</span>
+            )}
+          </button>
+        ))}
+      </div>
+
+      {loading && (
+        <div className="text-xs text-text-secondary">loading preview...</div>
+      )}
+
+      {error && (
+        <div className="wrap-break-word text-xs text-destructive">{error}</div>
+      )}
+
+      {preview && !loading && (
+        <div className="space-y-2">
+          <div className="wrap-break-word text-[0.68rem] leading-snug text-text-tertiary">
+            {preview.path}
+            {preview.truncated ? " (truncated)" : ""}
+          </div>
+          <PreviewBody preview={preview} objectUrl={objectUrl} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PreviewBody({
+  preview,
+  objectUrl,
+}: {
+  preview: FilePreviewResponse;
+  objectUrl: string | null;
+}) {
+  if (preview.kind === "text") {
+    return (
+      <pre className="max-h-80 overflow-auto rounded border border-border/70 bg-background/40 p-2 text-[0.68rem] leading-snug whitespace-pre-wrap text-foreground/90">
+        {preview.text || ""}
+      </pre>
+    );
+  }
+
+  if (preview.kind === "image") {
+    const src = preview.data_url || objectUrl;
+    return src ? (
+      <img
+        src={src}
+        alt={preview.name}
+        className="max-h-80 w-full rounded border border-border/70 object-contain"
+      />
+    ) : (
+      <PreviewUnavailable preview={preview} />
+    );
+  }
+
+  if (preview.kind === "pdf" && objectUrl) {
+    return (
+      <iframe
+        src={objectUrl}
+        title={preview.name}
+        className="h-80 w-full rounded border border-border/70 bg-background"
+      />
+    );
+  }
+
+  if (preview.kind === "video" && objectUrl) {
+    return (
+      <video
+        src={objectUrl}
+        controls
+        className="max-h-80 w-full rounded border border-border/70"
+      />
+    );
+  }
+
+  if (preview.kind === "audio" && objectUrl) {
+    return <audio src={objectUrl} controls className="w-full" />;
+  }
+
+  return <PreviewUnavailable preview={preview} />;
+}
+
+function PreviewUnavailable({ preview }: { preview: FilePreviewResponse }) {
+  return (
+    <div className="rounded border border-border/70 bg-background/40 p-2 text-xs text-text-secondary">
+      No inline preview for {preview.mime_type} ({formatBytes(preview.size)}).
+    </div>
+  );
+}
+
+function basename(path: string): string {
+  const parts = path.split(/[\\/]/).filter(Boolean);
+  return parts[parts.length - 1] || path;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function Section({

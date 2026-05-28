@@ -10685,7 +10685,12 @@ def cmd_dashboard(args):
 
     from hermes_cli.web_server import start_server
 
-    embedded_chat = args.tui or os.environ.get("HERMES_DASHBOARD_TUI") == "1"
+    tui_env = os.environ.get("HERMES_DASHBOARD_TUI", "").strip().lower()
+    embedded_chat = not getattr(args, "no_tui", False)
+    if tui_env in {"0", "false", "no", "off"}:
+        embedded_chat = False
+    elif getattr(args, "tui", False) or tui_env in {"1", "true", "yes", "on"}:
+        embedded_chat = True
     start_server(
         host=args.host,
         port=args.port,
@@ -13755,7 +13760,15 @@ Examples:
         action="store_true",
         help=(
             "Expose the in-browser Chat tab (embedded `hermes --tui` via PTY/WebSocket). "
-            "Alternatively set HERMES_DASHBOARD_TUI=1."
+            "This is now the default; the flag remains for compatibility."
+        ),
+    )
+    dashboard_parser.add_argument(
+        "--no-tui",
+        action="store_true",
+        help=(
+            "Hide the in-browser Chat tab. Alternatively set "
+            "HERMES_DASHBOARD_TUI=0."
         ),
     )
     dashboard_parser.add_argument(

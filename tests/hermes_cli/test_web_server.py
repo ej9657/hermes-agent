@@ -125,6 +125,34 @@ class TestWebServerEndpoints:
         assert "hermes_home" in data
         assert "active_sessions" in data
 
+    def test_file_preview_text_endpoint(self, tmp_path):
+        target = tmp_path / "preview.md"
+        target.write_text("# Hello\n\npreview body\n", encoding="utf-8")
+
+        resp = self.client.get("/api/files/preview", params={"path": str(target)})
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["path"] == str(target)
+        assert data["name"] == "preview.md"
+        assert data["kind"] == "text"
+        assert "# Hello" in data["text"]
+
+    def test_file_raw_endpoint_serves_inline(self, tmp_path):
+        target = tmp_path / "preview.txt"
+        target.write_text("raw body", encoding="utf-8")
+
+        resp = self.client.get("/api/files/raw", params={"path": str(target)})
+
+        assert resp.status_code == 200
+        assert resp.text == "raw body"
+        assert resp.headers["content-disposition"].startswith("inline;")
+
+    def test_file_preview_rejects_directories(self, tmp_path):
+        resp = self.client.get("/api/files/preview", params={"path": str(tmp_path)})
+
+        assert resp.status_code == 400
+
     def test_get_status_filters_unconfigured_gateway_platforms(self, monkeypatch):
         import gateway.config as gateway_config
         import hermes_cli.web_server as web_server
@@ -210,6 +238,42 @@ class TestWebServerEndpoints:
         assert resp.status_code == 200
         defaults = resp.json()
         assert "model" in defaults
+
+    def test_dashboard_preferences_round_trip(self):
+        from hermes_cli.config import load_config
+
+        resp = self.client.get("/api/dashboard/preferences")
+        assert resp.status_code == 200
+        assert resp.json()["preferences"]["sessions"] == {
+            "view": "overview",
+            "expanded_id": None,
+        }
+
+        resp = self.client.patch(
+            "/api/dashboard/preferences",
+            json={"preferences": {"sessions": {"view": "list", "expanded_id": "abc123"}}},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["preferences"]["sessions"] == {
+            "view": "list",
+            "expanded_id": "abc123",
+        }
+
+        resp = self.client.patch(
+            "/api/dashboard/preferences",
+            json={"preferences": {"sessions": {"expanded_id": None}}},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["preferences"]["sessions"] == {
+            "view": "list",
+            "expanded_id": None,
+        }
+
+        config = load_config()
+        assert config["dashboard"]["preferences"]["sessions"] == {
+            "view": "list",
+            "expanded_id": None,
+        }
 
     def test_get_env_vars(self):
         resp = self.client.get("/api/env")

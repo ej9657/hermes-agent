@@ -95,7 +95,9 @@ def test_tui_verbose_tool_events_omit_details_when_redaction_fails(monkeypatch):
 
     events: list[tuple[str, str, dict]] = []
     monkeypatch.setattr(
-        server, "_emit", lambda event_type, sid, payload: events.append((event_type, sid, payload))
+        server,
+        "_emit",
+        lambda event_type, sid, payload: events.append((event_type, sid, payload)),
     )
     monkeypatch.setitem(
         server._sessions,
@@ -110,6 +112,34 @@ def test_tui_verbose_tool_events_omit_details_when_redaction_fails(monkeypatch):
     assert events[1][0] == "tool.complete"
     assert "args_text" not in events[0][2]
     assert "result_text" not in events[1][2]
+
+
+def test_file_tool_complete_emits_preview_links(monkeypatch, tmp_path):
+    target = tmp_path / "notes.md"
+    result = json.dumps({"path": str(target), "total_lines": 1})
+    events: list[tuple[str, str, dict]] = []
+
+    monkeypatch.setattr(
+        server, "_emit", lambda event_type, sid, payload: events.append((event_type, sid, payload))
+    )
+    monkeypatch.setitem(
+        server._sessions,
+        "file-preview-test",
+        {"tool_progress_mode": "compact", "tool_started_at": {"tool-1": time.time()}},
+    )
+
+    server._on_tool_complete(
+        "file-preview-test",
+        "tool-1",
+        "read_file",
+        {"path": str(target)},
+        result,
+    )
+
+    assert events[0][0] == "tool.complete"
+    assert events[0][2]["file_previews"] == [
+        {"path": str(target), "label": "notes.md", "source": "read_file"}
+    ]
 
 
 def test_dispatch_rejects_non_object_request():

@@ -22,7 +22,7 @@ def _ns(**kw):
     """Build an argparse.Namespace with dashboard defaults plus overrides."""
     defaults = dict(
         port=9119, host="127.0.0.1", no_open=False, insecure=False,
-        tui=False, stop=False, status=False,
+        tui=False, no_tui=False, stop=False, status=False,
     )
     defaults.update(kw)
     return argparse.Namespace(**defaults)
@@ -156,6 +156,32 @@ class TestLifecycleFlagsTakePrecedence:
              pytest.raises(SystemExit):
             cmd_dashboard(_ns(stop=True))
         assert called["start"] is False
+
+
+class TestDashboardChatDefault:
+    def test_embedded_chat_is_default_on(self, monkeypatch):
+        calls = []
+
+        fake_ws = MagicMock()
+        fake_ws.start_server = lambda **kw: calls.append(kw)
+
+        monkeypatch.setitem(sys.modules, "hermes_cli.web_server", fake_ws)
+
+        cmd_dashboard(_ns(no_open=True, skip_build=True))
+
+        assert calls[-1]["embedded_chat"] is True
+
+    def test_no_tui_disables_embedded_chat(self, monkeypatch):
+        calls = []
+
+        fake_ws = MagicMock()
+        fake_ws.start_server = lambda **kw: calls.append(kw)
+
+        monkeypatch.setitem(sys.modules, "hermes_cli.web_server", fake_ws)
+
+        cmd_dashboard(_ns(no_open=True, no_tui=True, skip_build=True))
+
+        assert calls[-1]["embedded_chat"] is False
 
 
 class TestArgparseWiring:

@@ -12,7 +12,6 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
-  Database,
   MessageSquare,
   Search,
   Trash2,
@@ -26,9 +25,11 @@ import {
 } from "lucide-react";
 import { api } from "@/lib/api";
 import type {
+  DashboardPreferences,
   SessionInfo,
   SessionMessage,
   SessionSearchResult,
+  SessionsViewPreference,
   StatusResponse,
 } from "@/lib/api";
 import { timeAgo } from "@/lib/utils";
@@ -262,7 +263,9 @@ function SessionRow({
   isExpanded,
   onToggle,
   onDelete,
+  onSelectToggle,
   resumeInChatEnabled,
+  selected,
 }: {
   session: SessionInfo;
   snippet?: string;
@@ -270,7 +273,9 @@ function SessionRow({
   isExpanded: boolean;
   onToggle: () => void;
   onDelete: () => void;
+  onSelectToggle: () => void;
   resumeInChatEnabled: boolean;
+  selected: boolean;
 }) {
   const [messages, setMessages] = useState<SessionMessage[] | null>(null);
   const [loading, setLoading] = useState(false);
@@ -337,6 +342,8 @@ function SessionRow({
       className={`max-w-full min-w-0 overflow-hidden border transition-colors ${
         session.is_active
           ? "border-success/30 bg-success/[0.03]"
+          : selected
+            ? "border-primary/40 bg-primary/[0.05]"
           : "border-border"
       }`}
     >
@@ -344,6 +351,17 @@ function SessionRow({
         className="flex cursor-pointer items-start gap-3 p-3 transition-colors hover:bg-secondary/30"
         onClick={onToggle}
       >
+        <input
+          type="checkbox"
+          checked={selected}
+          aria-label={`Select session ${session.title ?? session.id}`}
+          className="mt-0.5 h-4 w-4 shrink-0 accent-current"
+          onChange={(e) => {
+            e.stopPropagation();
+            onSelectToggle();
+          }}
+          onClick={(e) => e.stopPropagation()}
+        />
         <div className={`shrink-0 pt-0.5 ${sourceInfo.color}`}>
           <SourceIcon className="h-4 w-4" />
         </div>
@@ -424,7 +442,7 @@ function SessionRow({
   );
 }
 
-type SessionsView = "list" | "overview";
+type SessionsView = SessionsViewPreference;
 
 const PAGE_SIZE = 20;
 
@@ -492,11 +510,36 @@ export default function SessionsPage() {
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const [overviewSessions, setOverviewSessions] = useState<SessionInfo[]>([]);
   const [view, setView] = useState<SessionsView>("overview");
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const [bulkConfirmOpen, setBulkConfirmOpen] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const preferencesLoadedRef = useRef(false);
   const { toast, showToast } = useToast();
   const { t } = useI18n();
   const { setAfterTitle } = usePageHeader();
   const { activeAction, actionStatus, dismissLog } = useSystemActions();
   const resumeInChatEnabled = isDashboardEmbeddedChatEnabled();
+
+  const persistDashboardPreferences = useCallback(
+    (preferences: DashboardPreferences) => {
+      api.updateDashboardPreferences(preferences).catch(() => {});
+    },
+    [],
+  );
+
+  useEffect(() => {
+    api
+      .getDashboardPreferences()
+      .then((resp) => {
+        const sessionsPrefs = resp.preferences.sessions;
+        setView(sessionsPrefs.view);
+        setExpandedId(sessionsPrefs.expanded_id);
+      })
+      .catch(() => {})
+      .finally(() => {
+        preferencesLoadedRef.current = true;
+      });
+  }, []);
 
   useLayoutEffect(() => {
     if (loading) {
@@ -581,7 +624,10 @@ export default function SessionsPage() {
           await api.deleteSession(id);
           setSessions((prev) => prev.filter((s) => s.id !== id));
           setTotal((prev) => prev - 1);
-          if (expandedId === id) setExpandedId(null);
+          if (expandedId === id) {
+            setExpandedId(null);
+            persistDashboardPreferences({ sessions: { expanded_id: null } });
+          }
           showToast(t.sessions.sessionDeleted, "success");
         } catch {
           showToast(t.sessions.failedToDelete, "error");
@@ -590,6 +636,7 @@ export default function SessionsPage() {
       },
       [
         expandedId,
+        persistDashboardPreferences,
         showToast,
         t.sessions.sessionDeleted,
         t.sessions.failedToDelete,
@@ -600,6 +647,22 @@ export default function SessionsPage() {
   const pendingSession = sessionDelete.pendingId
     ? sessions.find((s) => s.id === sessionDelete.pendingId)
     : null;
+
+  const toggleSelected = useCallback((id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }, []);
+
+  const clearSelection = useCallback(() => {
+    setSelectedIds(new Set());
+  }, []);
 
   // Build snippet map from search results (session_id → snippet)
   const snippetMap = new Map<string, string>();
@@ -627,10 +690,90 @@ export default function SessionsPage() {
     platformEntries.length > 0 || recentSessions.length > 0;
   const showList = view === "list" || isSearching || !showOverviewTab;
   const showPagination = showList && !searchResults && total > PAGE_SIZE;
+  const visibleSessions = showList ? filtered : recentSessions;
+  const visibleEmptySessions = visibleSessions.filter(
+    (s) => s.message_count === 0,
+  );
+  const selectedCount = selectedIds.size;
+
+  const selectVisibleEmptySessions = useCallback(() => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      for (const session of visibleEmptySessions) {
+        next.add(session.id);
+      }
+      return next;
+    });
+  }, [visibleEmptySessions]);
+
+  const deleteSelectedSessions = useCallback(async () => {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+
+    setBulkDeleting(true);
+    try {
+      const results = await Promise.allSettled(ids.map((id) => api.deleteSession(id)));
+      const deleted = ids.filter((_, i) => results[i].status === "fulfilled");
+      const deletedIds = new Set(deleted);
+      if (deleted.length > 0) {
+        setSessions((prev) => prev.filter((s) => !deletedIds.has(s.id)));
+        setOverviewSessions((prev) => prev.filter((s) => !deletedIds.has(s.id)));
+        setTotal((prev) => Math.max(0, prev - deleted.length));
+        setSelectedIds((prev) => {
+          const next = new Set(prev);
+          for (const id of deletedIds) next.delete(id);
+          return next;
+        });
+        if (expandedId && deletedIds.has(expandedId)) {
+          setExpandedId(null);
+          persistDashboardPreferences({ sessions: { expanded_id: null } });
+        }
+      }
+
+      const failed = ids.length - deleted.length;
+      if (failed > 0) {
+        showToast(`${failed} selected session${failed === 1 ? "" : "s"} failed to delete`, "error");
+      } else {
+        showToast(`${deleted.length} selected session${deleted.length === 1 ? "" : "s"} deleted`, "success");
+      }
+    } finally {
+      setBulkDeleting(false);
+      setBulkConfirmOpen(false);
+    }
+  }, [
+    expandedId,
+    persistDashboardPreferences,
+    selectedIds,
+    showToast,
+  ]);
 
   useEffect(() => {
     if (isSearching) setView("list");
   }, [isSearching]);
+
+  const handleViewChange = useCallback(
+    (next: string) => {
+      if (next !== "overview" && next !== "list") return;
+      setView(next);
+      if (preferencesLoadedRef.current) {
+        persistDashboardPreferences({ sessions: { view: next } });
+      }
+    },
+    [persistDashboardPreferences],
+  );
+
+  const handleSessionToggle = useCallback(
+    (sessionId: string) => {
+      setExpandedId((prev) => {
+        const next = prev === sessionId ? null : sessionId;
+        if (preferencesLoadedRef.current) {
+          persistDashboardPreferences({ sessions: { expanded_id: next } });
+        }
+        return next;
+      });
+    },
+    [persistDashboardPreferences],
+  );
 
   const alerts: { message: string; detail?: string }[] = [];
   if (status) {
@@ -679,6 +822,15 @@ export default function SessionsPage() {
             : t.sessions.confirmDeleteMessage
         }
         loading={sessionDelete.isDeleting}
+      />
+
+      <DeleteConfirmDialog
+        open={bulkConfirmOpen}
+        onCancel={() => setBulkConfirmOpen(false)}
+        onConfirm={deleteSelectedSessions}
+        title={`Delete ${selectedCount} selected session${selectedCount === 1 ? "" : "s"}?`}
+        description="This permanently removes the selected conversations and all of their messages. This cannot be undone."
+        loading={bulkDeleting}
       />
 
       {alerts.length > 0 && (
@@ -775,7 +927,7 @@ export default function SessionsPage() {
                 className="w-fit shrink-0"
                 size="md"
                 value={view}
-                onChange={setView}
+                onChange={handleViewChange}
                 options={[
                   { value: "overview", label: t.sessions.overview },
                   { value: "list", label: t.sessions.title },
@@ -823,6 +975,44 @@ export default function SessionsPage() {
         </div>
       ) : null}
 
+      {(selectedCount > 0 || visibleEmptySessions.length > 0) && (
+        <div className="flex min-w-0 flex-wrap items-center gap-2 border border-border bg-background-base/50 px-3 py-2">
+          <span className="text-xs text-muted-foreground">
+            {selectedCount} selected
+          </span>
+          {visibleEmptySessions.length > 0 && (
+            <Button
+              outlined
+              size="sm"
+              onClick={selectVisibleEmptySessions}
+              className="text-xs"
+            >
+              Select {visibleEmptySessions.length} empty
+            </Button>
+          )}
+          {selectedCount > 0 && (
+            <>
+              <Button
+                outlined
+                size="sm"
+                onClick={clearSelection}
+                className="text-xs"
+              >
+                Clear
+              </Button>
+              <Button
+                destructive
+                size="sm"
+                onClick={() => setBulkConfirmOpen(true)}
+                className="text-xs"
+              >
+                Delete selected
+              </Button>
+            </>
+          )}
+        </div>
+      )}
+
       {showList ? (
         filtered.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
@@ -846,11 +1036,11 @@ export default function SessionsPage() {
                   snippet={snippetMap.get(s.id)}
                   searchQuery={search || undefined}
                   isExpanded={expandedId === s.id}
-                  onToggle={() =>
-                    setExpandedId((prev) => (prev === s.id ? null : s.id))
-                  }
+                  onToggle={() => handleSessionToggle(s.id)}
+                  onSelectToggle={() => toggleSelected(s.id)}
                   onDelete={() => sessionDelete.requestDelete(s.id)}
                   resumeInChatEnabled={resumeInChatEnabled}
+                  selected={selectedIds.has(s.id)}
                 />
               ))}
             </div>
@@ -883,38 +1073,16 @@ export default function SessionsPage() {
 
               <CardContent className="grid min-w-0 gap-3">
                 {recentSessions.map((s) => (
-                  <div
+                  <SessionRow
                     key={s.id}
-                    className="flex min-w-0 max-w-full flex-col gap-2 border border-border p-3 sm:flex-row sm:items-center sm:justify-between"
-                  >
-                    <div className="flex min-w-0 flex-1 flex-col gap-1">
-                      <span className="font-mondwest normal-case min-w-0 truncate text-sm font-medium">
-                        {s.title ?? t.common.untitled}
-                      </span>
-
-                      <span className="min-w-0 break-words text-xs text-muted-foreground">
-                        <span className="font-mono-ui">
-                          {(s.model ?? t.common.unknown).split("/").pop()}
-                        </span>{" "}
-                        · {s.message_count} {t.common.msgs} ·{" "}
-                        {timeAgo(s.last_active)}
-                      </span>
-
-                      {s.preview && (
-                        <p className="font-mondwest normal-case min-w-0 max-w-full text-xs leading-snug text-text-tertiary [overflow-wrap:anywhere]">
-                          {s.preview}
-                        </p>
-                      )}
-                    </div>
-
-                    <Badge
-                      tone="outline"
-                      className="shrink-0 self-start text-xs sm:self-center"
-                    >
-                      <Database className="mr-1 h-3 w-3" />
-                      {s.source ?? "local"}
-                    </Badge>
-                  </div>
+                    session={s}
+                    isExpanded={expandedId === s.id}
+                    onToggle={() => handleSessionToggle(s.id)}
+                    onSelectToggle={() => toggleSelected(s.id)}
+                    onDelete={() => sessionDelete.requestDelete(s.id)}
+                    resumeInChatEnabled={resumeInChatEnabled}
+                    selected={selectedIds.has(s.id)}
+                  />
                 ))}
               </CardContent>
             </Card>

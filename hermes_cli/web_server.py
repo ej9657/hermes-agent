@@ -10,10 +10,12 @@ Usage:
 """
 
 import asyncio
+import base64
 import hmac
 import importlib.util
 import json
 import logging
+import mimetypes
 import os
 import secrets
 import stat
@@ -88,14 +90,54 @@ app = FastAPI(title="Hermes Agent", version=__version__)
 _SESSION_TOKEN = secrets.token_urlsafe(32)
 _SESSION_HEADER_NAME = "X-Hermes-Session-Token"
 
-# In-browser Chat tab (/chat, /api/pty, …).  Off unless ``hermes dashboard --tui``
-# or HERMES_DASHBOARD_TUI=1.  Set from :func:`start_server`.
+# In-browser Chat tab (/chat, /api/pty, …).  On by default for
+# ``hermes dashboard``; ``--no-tui`` or HERMES_DASHBOARD_TUI=0 disables it.
+# Set from :func:`start_server`.
 _DASHBOARD_EMBEDDED_CHAT_ENABLED = False
 
 # Simple rate limiter for the reveal endpoint
 _reveal_timestamps: List[float] = []
 _REVEAL_MAX_PER_WINDOW = 5
 _REVEAL_WINDOW_SECONDS = 30
+_FILE_PREVIEW_TEXT_BYTES = 256 * 1024
+_FILE_PREVIEW_IMAGE_BYTES = 5 * 1024 * 1024
+
+_TEXT_PREVIEW_EXTENSIONS = frozenset({
+    ".bash",
+    ".cfg",
+    ".conf",
+    ".css",
+    ".csv",
+    ".env",
+    ".gitignore",
+    ".html",
+    ".ini",
+    ".js",
+    ".json",
+    ".jsx",
+    ".log",
+    ".md",
+    ".mjs",
+    ".py",
+    ".rb",
+    ".rs",
+    ".sh",
+    ".sql",
+    ".toml",
+    ".ts",
+    ".tsx",
+    ".txt",
+    ".xml",
+    ".yaml",
+    ".yml",
+})
+
+_DASHBOARD_PREFERENCES_DEFAULTS: Dict[str, Any] = {
+    "sessions": {
+        "view": "overview",
+        "expanded_id": None,
+    },
+}
 
 # CORS: restrict to localhost origins only.  The web UI is intended to run
 # locally; binding to 0.0.0.0 with allow_origins=["*"] would let any website
@@ -446,6 +488,10 @@ CONFIG_SCHEMA = _ordered_schema
 
 class ConfigUpdate(BaseModel):
     config: dict
+
+
+class DashboardPreferencesUpdate(BaseModel):
+    preferences: Dict[str, Any]
 
 
 class EnvVarUpdate(BaseModel):
@@ -2495,6 +2541,125 @@ async def get_session_messages(session_id: str):
         db.close()
 
 
+def _resolve_dashboard_file_path(raw_path: str) -> Path:
+    if not raw_path or not str(raw_path).strip():
+        raise HTTPException(status_code=400, detail="Missing file path")
+    try:
+        path = Path(str(raw_path)).expanduser()
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid file path: {exc}") from exc
+    if not path.is_absolute():
+        path = Path(os.environ.get("TERMINAL_CWD") or os.getcwd()) / path
+    try:
+        return path.resolve()
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid file path: {exc}") from exc
+
+
+def _assert_previewable_file(path: Path) -> None:
+    try:
+        if not path.exists():
+            raise HTTPException(status_code=404, detail="File not found")
+        if not path.is_file():
+            raise HTTPException(status_code=400, detail="Path is not a regular file")
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=f"Cannot inspect file: {exc}") from exc
+
+    try:
+        from agent.file_safety import get_read_block_error
+
+        block_error = get_read_block_error(str(path))
+        if block_error:
+            raise HTTPException(status_code=403, detail=block_error)
+    except HTTPException:
+        raise
+    except Exception:
+        pass
+
+
+def _file_kind(path: Path, mime_type: str) -> str:
+    suffix = path.suffix.lower()
+    if mime_type.startswith("text/") or suffix in _TEXT_PREVIEW_EXTENSIONS:
+        return "text"
+    if mime_type.startswith("image/"):
+        return "image"
+    if mime_type == "application/pdf":
+        return "pdf"
+    if mime_type.startswith("audio/"):
+        return "audio"
+    if mime_type.startswith("video/"):
+        return "video"
+    return "binary"
+
+
+def _redact_preview_text(text: str) -> str:
+    try:
+        from agent.redact import redact_sensitive_text
+
+        return redact_sensitive_text(text, code_file=True)
+    except Exception:
+        return text
+
+
+@app.get("/api/files/preview")
+async def get_file_preview(path: str):
+    resolved = _resolve_dashboard_file_path(path)
+    _assert_previewable_file(resolved)
+
+    try:
+        stat_result = resolved.stat()
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=f"Cannot stat file: {exc}") from exc
+
+    mime_type = mimetypes.guess_type(str(resolved))[0] or "application/octet-stream"
+    kind = _file_kind(resolved, mime_type)
+    payload: Dict[str, Any] = {
+        "path": str(resolved),
+        "name": resolved.name,
+        "size": stat_result.st_size,
+        "mtime": stat_result.st_mtime,
+        "mime_type": mime_type,
+        "kind": kind,
+        "truncated": False,
+    }
+
+    if kind == "text":
+        try:
+            raw = resolved.read_bytes()[:_FILE_PREVIEW_TEXT_BYTES + 1]
+        except OSError as exc:
+            raise HTTPException(status_code=400, detail=f"Cannot read file: {exc}") from exc
+        truncated = len(raw) > _FILE_PREVIEW_TEXT_BYTES
+        if truncated:
+            raw = raw[:_FILE_PREVIEW_TEXT_BYTES]
+        text = raw.decode("utf-8", errors="replace")
+        payload["text"] = _redact_preview_text(text)
+        payload["truncated"] = truncated or stat_result.st_size > len(raw)
+    elif kind == "image" and stat_result.st_size <= _FILE_PREVIEW_IMAGE_BYTES:
+        try:
+            encoded = base64.b64encode(resolved.read_bytes()).decode("ascii")
+        except OSError as exc:
+            raise HTTPException(status_code=400, detail=f"Cannot read file: {exc}") from exc
+        payload["data_url"] = f"data:{mime_type};base64,{encoded}"
+
+    return payload
+
+
+@app.get("/api/files/raw")
+async def get_file_raw(path: str):
+    resolved = _resolve_dashboard_file_path(path)
+    _assert_previewable_file(resolved)
+    mime_type = mimetypes.guess_type(str(resolved))[0] or "application/octet-stream"
+    filename = resolved.name.replace('"', "")
+    return FileResponse(
+        resolved,
+        media_type=mime_type,
+        headers={
+            "Content-Disposition": f'inline; filename="{filename}"',
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
 @app.delete("/api/sessions/{session_id}")
 async def delete_session_endpoint(session_id: str):
     from hermes_state import SessionDB
@@ -4091,6 +4256,72 @@ async def set_dashboard_theme(body: ThemeSetBody):
     config["dashboard"]["theme"] = body.name
     save_config(config)
     return {"ok": True, "theme": body.name}
+
+
+def _coerce_dashboard_preferences(raw: Any, *, include_defaults: bool = True) -> Dict[str, Any]:
+    """Return the supported dashboard preference subset with safe values."""
+    prefs = (
+        {"sessions": dict(_DASHBOARD_PREFERENCES_DEFAULTS["sessions"])}
+        if include_defaults
+        else {"sessions": {}}
+    )
+    if not isinstance(raw, dict):
+        return prefs
+
+    sessions = raw.get("sessions")
+    if isinstance(sessions, dict):
+        view = sessions.get("view")
+        if view in {"overview", "list"}:
+            prefs["sessions"]["view"] = view
+
+        expanded_id = sessions.get("expanded_id")
+        if isinstance(expanded_id, str):
+            expanded_id = expanded_id.strip()
+            prefs["sessions"]["expanded_id"] = expanded_id[:200] if expanded_id else None
+        elif expanded_id is None:
+            prefs["sessions"]["expanded_id"] = None
+
+    return prefs
+
+
+def _dashboard_preferences_from_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    dashboard = config.get("dashboard")
+    if not isinstance(dashboard, dict):
+        return _coerce_dashboard_preferences({})
+    return _coerce_dashboard_preferences(dashboard.get("preferences"))
+
+
+@app.get("/api/dashboard/preferences")
+async def get_dashboard_preferences():
+    """Return persisted dashboard UI preferences.
+
+    These are local operator preferences, not workflow facts or session memory.
+    They live under ``dashboard.preferences`` in config.yaml so they survive
+    browser refreshes, dashboard restarts, and new Hermes sessions.
+    """
+    return {"preferences": _dashboard_preferences_from_config(load_config())}
+
+
+@app.patch("/api/dashboard/preferences")
+async def update_dashboard_preferences(body: DashboardPreferencesUpdate):
+    """Merge and persist supported dashboard UI preferences."""
+    config = load_config()
+    dashboard = config.get("dashboard")
+    if not isinstance(dashboard, dict):
+        dashboard = {}
+    current = _dashboard_preferences_from_config(config)
+    incoming = _coerce_dashboard_preferences(body.preferences, include_defaults=False)
+
+    merged = {
+        "sessions": {
+            **current["sessions"],
+            **incoming["sessions"],
+        },
+    }
+    dashboard["preferences"] = merged
+    config["dashboard"] = dashboard
+    save_config(config)
+    return {"ok": True, "preferences": merged}
 
 
 # ---------------------------------------------------------------------------

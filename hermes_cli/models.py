@@ -33,7 +33,6 @@ COPILOT_REASONING_EFFORTS_O_SERIES = ["low", "medium", "high"]
 # (model_id, display description shown in menus)
 OPENROUTER_MODELS: list[tuple[str, str]] = [
     ("anthropic/claude-opus-4.7",              ""),
-    ("anthropic/claude-opus-4.6",              ""),
     ("anthropic/claude-sonnet-4.6",            ""),
     ("moonshotai/kimi-k2.6",                   "recommended"),
     ("openrouter/pareto-code",                 "auto-routes to cheapest coder meeting openrouter.min_coding_score"),
@@ -80,7 +79,6 @@ VERCEL_AI_GATEWAY_MODELS: list[tuple[str, str]] = [
     ("minimax/minimax-m2.7",                 ""),
     ("anthropic/claude-sonnet-4.6",          ""),
     ("anthropic/claude-opus-4.7",            ""),
-    ("anthropic/claude-opus-4.6",            ""),
     ("anthropic/claude-haiku-4.5",           ""),
     ("openai/gpt-5.4",                       ""),
     ("openai/gpt-5.4-mini",                  ""),
@@ -163,7 +161,6 @@ def _xai_curated_models() -> list[str]:
 _PROVIDER_MODELS: dict[str, list[str]] = {
     "nous": [
         "anthropic/claude-opus-4.7",
-        "anthropic/claude-opus-4.6",
         "anthropic/claude-sonnet-4.6",
         "moonshotai/kimi-k2.6",
         "qwen/qwen3.6-plus",
@@ -314,7 +311,6 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
     ],
     "anthropic": [
         "claude-opus-4-7",
-        "claude-opus-4-6",
         "claude-sonnet-4-6",
         "claude-opus-4-5-20251101",
         "claude-sonnet-4-5-20250929",
@@ -365,7 +361,7 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
         "gpt-5",
         "gpt-5-codex",
         "gpt-5-nano",
-        "claude-opus-4-6",
+        "claude-opus-4-7",
         "claude-opus-4-5",
         "claude-opus-4-1",
         "claude-sonnet-4-6",
@@ -403,7 +399,7 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
         "qwen3.5-plus",
     ],
     "kilocode": [
-        "anthropic/claude-opus-4.6",
+        "anthropic/claude-opus-4.7",
         "anthropic/claude-sonnet-4.6",
         "openai/gpt-5.4",
         "google/gemini-3-pro-preview",
@@ -483,6 +479,11 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
 # and the static fallback catalog (bare ids) stay in sync from a single
 # source of truth.
 _PROVIDER_MODELS["ai-gateway"] = [mid for mid, _ in VERCEL_AI_GATEWAY_MODELS]
+
+_LEGACY_PROVIDER_MODEL_MATCHES: dict[str, tuple[str, str]] = {
+    "claude-opus-4-6": ("anthropic", "claude-opus-4-6"),
+    "claude-opus-4.6": ("anthropic", "claude-opus-4-6"),
+}
 
 # ---------------------------------------------------------------------------
 # Nous Portal free-model helper
@@ -1854,6 +1855,10 @@ def detect_static_provider_for_model(
     # If the model belongs to the current provider's catalog, don't suggest switching
     if _model_in_provider_catalog(name_lower, current_keys):
         return None
+
+    legacy_match = _LEGACY_PROVIDER_MODEL_MATCHES.get(name_lower)
+    if legacy_match and legacy_match[0] not in current_keys:
+        return legacy_match
 
     # --- Step 1: check static provider catalogs for a direct match ---
     for pid, models in _PROVIDER_MODELS.items():

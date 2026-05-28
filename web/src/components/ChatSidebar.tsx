@@ -198,7 +198,12 @@ export function ChatSidebar({ channel, className }: ChatSidebarProps) {
 
       if (type === "tool.start") {
         const p = payload as
-          | { tool_id?: string; name?: string; context?: string }
+          | {
+              tool_id?: string;
+              name?: string;
+              context?: string;
+              file_previews?: ToolEntry["file_previews"];
+            }
           | undefined;
         const toolId = p?.tool_id;
 
@@ -215,6 +220,7 @@ export function ChatSidebar({ channel, className }: ChatSidebarProps) {
               tool_id: toolId,
               name: p?.name ?? "tool",
               context: p?.context,
+              file_previews: p?.file_previews,
               status: "running" as const,
               startedAt: Date.now(),
             },
@@ -243,6 +249,7 @@ export function ChatSidebar({ channel, className }: ChatSidebarProps) {
               summary?: string;
               error?: string;
               inline_diff?: string;
+              file_previews?: ToolEntry["file_previews"];
             }
           | undefined;
 
@@ -259,6 +266,7 @@ export function ChatSidebar({ channel, className }: ChatSidebarProps) {
                   summary: p.summary,
                   error: p.error,
                   inline_diff: p.inline_diff,
+                  file_previews: p.file_previews ?? t.file_previews,
                   completedAt: Date.now(),
                 }
               : t,

@@ -51,6 +51,20 @@ export async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> 
   return res.json();
 }
 
+async function fetchBlob(url: string, init?: RequestInit): Promise<Blob> {
+  const headers = new Headers(init?.headers);
+  const token = window.__HERMES_SESSION_TOKEN__;
+  if (token) {
+    setSessionHeader(headers, token);
+  }
+  const res = await fetch(`${BASE}${url}`, { ...init, headers });
+  if (!res.ok) {
+    const text = await res.text().catch(() => res.statusText);
+    throw new Error(`${res.status}: ${text}`);
+  }
+  return res.blob();
+}
+
 /** Encode a plugin registry key for URL paths (preserves `/` segment separators). */
 function pluginPath(name: string): string {
   return name.split("/").map(encodeURIComponent).join("/");
@@ -210,6 +224,12 @@ export const api = {
       body: JSON.stringify({ name, enabled }),
     }),
   getToolsets: () => fetchJSON<ToolsetInfo[]>("/api/tools/toolsets"),
+  getFilePreview: (path: string) =>
+    fetchJSON<FilePreviewResponse>(
+      `/api/files/preview?path=${encodeURIComponent(path)}`,
+    ),
+  getFileBlob: (path: string) =>
+    fetchBlob(`/api/files/raw?path=${encodeURIComponent(path)}`),
 
   // Session search (FTS5)
   searchSessions: (q: string) =>
@@ -346,6 +366,16 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name }),
     }),
+
+  // Dashboard preferences
+  getDashboardPreferences: () =>
+    fetchJSON<DashboardPreferencesResponse>("/api/dashboard/preferences"),
+  updateDashboardPreferences: (preferences: DashboardPreferences) =>
+    fetchJSON<DashboardPreferencesUpdateResponse>("/api/dashboard/preferences", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ preferences }),
+    }),
 };
 
 export interface ActionResponse {
@@ -385,6 +415,29 @@ export interface StatusResponse {
   latest_config_version: number;
   release_date: string;
   version: string;
+}
+
+export type SessionsViewPreference = "overview" | "list";
+
+export interface DashboardPreferences {
+  sessions?: {
+    view?: SessionsViewPreference;
+    expanded_id?: string | null;
+  };
+}
+
+export interface DashboardPreferencesResponse {
+  preferences: {
+    sessions: {
+      view: SessionsViewPreference;
+      expanded_id: string | null;
+    };
+  };
+}
+
+export interface DashboardPreferencesUpdateResponse
+  extends DashboardPreferencesResponse {
+  ok: boolean;
 }
 
 export interface SessionInfo {
@@ -590,6 +643,18 @@ export interface ToolsetInfo {
   enabled: boolean;
   configured: boolean;
   tools: string[];
+}
+
+export interface FilePreviewResponse {
+  path: string;
+  name: string;
+  size: number;
+  mtime: number;
+  mime_type: string;
+  kind: "text" | "image" | "pdf" | "audio" | "video" | "binary";
+  truncated: boolean;
+  text?: string;
+  data_url?: string;
 }
 
 export interface SessionSearchResult {
