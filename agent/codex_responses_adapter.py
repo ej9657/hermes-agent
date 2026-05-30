@@ -71,6 +71,23 @@ _TOOL_CALL_LEAK_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+_RESPONSES_FUNCTION_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def _sanitize_responses_function_name(name: str) -> str:
+    """Normalize a function-call name for Responses API replay.
+
+    The live Hermes tool registry already uses valid names, but persisted
+    Codex app-server projections may contain readable dotted names such as
+    ``mcp.obsidian.search_notes``. The Responses API rejects those during
+    replay/background review, so repair history at the provider boundary.
+    """
+    raw = str(name or "").strip()
+    if _RESPONSES_FUNCTION_NAME_PATTERN.fullmatch(raw):
+        return raw
+    sanitized = re.sub(r"[^A-Za-z0-9_-]", "_", raw).strip("_")
+    return sanitized or "tool"
+
 
 # ---------------------------------------------------------------------------
 # Multimodal content helpers
@@ -467,6 +484,7 @@ def _chat_messages_to_responses_input(
                         fn_name = fn.get("name")
                         if not isinstance(fn_name, str) or not fn_name.strip():
                             continue
+                        fn_name = _sanitize_responses_function_name(fn_name)
 
                         embedded_call_id, embedded_response_item_id = _split_responses_tool_id(
                             tc.get("id")
@@ -567,6 +585,7 @@ def _preflight_codex_input_items(raw_items: Any) -> List[Dict[str, Any]]:
                 raise ValueError(f"Codex Responses input[{idx}] function_call is missing call_id.")
             if not isinstance(name, str) or not name.strip():
                 raise ValueError(f"Codex Responses input[{idx}] function_call is missing name.")
+            name = _sanitize_responses_function_name(name)
 
             arguments = item.get("arguments", "{}")
             if isinstance(arguments, dict):
@@ -579,7 +598,7 @@ def _preflight_codex_input_items(raw_items: Any) -> List[Dict[str, Any]]:
                 {
                     "type": "function_call",
                     "call_id": call_id.strip(),
-                    "name": name.strip(),
+                    "name": name,
                     "arguments": arguments,
                 }
             )

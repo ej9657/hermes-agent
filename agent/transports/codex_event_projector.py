@@ -11,7 +11,7 @@ Codex emits items with a discriminator field `type`:
   - reasoning           → stashed in the assistant's "reasoning" field
   - commandExecution    → assistant tool_call(name="exec") + tool result
   - fileChange          → assistant tool_call(name="apply_patch") + tool result
-  - mcpToolCall         → assistant tool_call(name=f"mcp.{server}.{tool}") + tool result
+  - mcpToolCall         → assistant tool_call(name=f"mcp_{server}_{tool}") + tool result
   - dynamicToolCall     → assistant tool_call(name=tool) + tool result
   - plan/hookPrompt/collabAgentToolCall → recorded as opaque assistant notes
 
@@ -30,8 +30,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any, Optional
+
+
+def _responses_function_name(*parts: Any) -> str:
+    """Return a Responses-compatible projection-only function name."""
+    raw = "_".join(str(part or "").strip() for part in parts if str(part or "").strip())
+    sanitized = re.sub(r"[^A-Za-z0-9_-]", "_", raw).strip("_")
+    return sanitized or "codex_tool"
 
 
 def _deterministic_call_id(item_type: str, item_id: str) -> str:
@@ -218,6 +226,7 @@ class CodexEventProjector:
         server = item.get("server") or "mcp"
         tool = item.get("tool") or "unknown"
         call_id = _deterministic_call_id(f"mcp_{server}_{tool}", item_id)
+        function_name = _responses_function_name("mcp", server, tool)
         args = item.get("arguments") or {}
         if not isinstance(args, dict):
             args = {"arguments": args}
@@ -229,7 +238,7 @@ class CodexEventProjector:
                     "id": call_id,
                     "type": "function",
                     "function": {
-                        "name": f"mcp.{server}.{tool}",
+                        "name": function_name,
                         "arguments": _format_tool_args(args),
                     },
                 }
@@ -260,6 +269,7 @@ class CodexEventProjector:
     ) -> ProjectionResult:
         tool = item.get("tool") or "unknown"
         call_id = _deterministic_call_id(f"dyn_{tool}", item_id)
+        function_name = _responses_function_name(tool)
         args = item.get("arguments") or {}
         if not isinstance(args, dict):
             args = {"arguments": args}
@@ -271,7 +281,7 @@ class CodexEventProjector:
                     "id": call_id,
                     "type": "function",
                     "function": {
-                        "name": tool,
+                        "name": function_name,
                         "arguments": _format_tool_args(args),
                     },
                 }
