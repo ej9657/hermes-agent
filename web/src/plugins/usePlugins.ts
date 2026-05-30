@@ -17,6 +17,12 @@ import {
   setPluginLoadError,
 } from "./registry";
 
+function shouldLoadPluginAssets(manifest: PluginManifest) {
+  if (!manifest.tab.hidden) return true;
+  if (manifest.tab.override) return true;
+  return (manifest.slots?.length ?? 0) > 0;
+}
+
 export function usePlugins() {
   const [manifests, setManifests] = useState<PluginManifest[]>([]);
   const [plugins, setPlugins] = useState<RegisteredPlugin[]>([]);
@@ -41,6 +47,8 @@ export function usePlugins() {
     const injectedScripts: HTMLScriptElement[] = [];
 
     for (const manifest of manifests) {
+      if (!shouldLoadPluginAssets(manifest)) continue;
+
       // Inject CSS if specified.
       if (manifest.css) {
         const cssUrl = `${HERMES_BASE_PATH}/dashboard-plugins/${manifest.name}/${manifest.css}`;
@@ -109,9 +117,11 @@ export function usePlugins() {
 
   // Listen for plugin registrations and resolve them against manifests.
   useEffect(() => {
+    const loadableManifests = manifests.filter(shouldLoadPluginAssets);
+
     function resolvePlugins() {
       const resolved: RegisteredPlugin[] = [];
-      for (const manifest of manifests) {
+      for (const manifest of loadableManifests) {
         const component = getPluginComponent(manifest.name);
         if (component) {
           resolved.push({ manifest, component });
@@ -119,7 +129,10 @@ export function usePlugins() {
       }
       setPlugins(resolved);
       // If all plugins registered, stop loading early.
-      if (resolved.length === manifests.length && manifests.length > 0) {
+      if (
+        resolved.length === loadableManifests.length &&
+        loadableManifests.length > 0
+      ) {
         setLoading(false);
       }
     }

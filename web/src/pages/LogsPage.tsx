@@ -68,6 +68,52 @@ export default function LogsPage() {
   const { t } = useI18n();
   const { setAfterTitle, setEnd } = usePageHeader();
 
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getDashboardPreferences()
+      .then((prefs) => {
+        if (cancelled) return;
+        const logs = prefs.filters?.logs;
+        setFile(logs?.file ?? "agent");
+        setLevel(logs?.level ?? "ALL");
+        setComponent(logs?.component ?? "all");
+        setLineCount(logs?.line_count ?? 100);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const setPersistedFile = useCallback((next: (typeof FILES)[number]) => {
+    setFile(next);
+    void api
+      .patchDashboardPreferences({ filters: { logs: { file: next } } })
+      .catch(() => {});
+  }, []);
+
+  const setPersistedLevel = useCallback((next: (typeof LEVELS)[number]) => {
+    setLevel(next);
+    void api
+      .patchDashboardPreferences({ filters: { logs: { level: next } } })
+      .catch(() => {});
+  }, []);
+
+  const setPersistedComponent = useCallback((next: (typeof COMPONENTS)[number]) => {
+    setComponent(next);
+    void api
+      .patchDashboardPreferences({ filters: { logs: { component: next } } })
+      .catch(() => {});
+  }, []);
+
+  const setPersistedLineCount = useCallback((next: (typeof LINE_COUNTS)[number]) => {
+    setLineCount(next);
+    void api
+      .patchDashboardPreferences({ filters: { logs: { line_count: next } } })
+      .catch(() => {});
+  }, []);
+
   const fetchLogs = useCallback(() => {
     setLoading(true);
     setError(null);
@@ -165,7 +211,7 @@ export default function LogsPage() {
           <Segmented
             className={segmentedClass}
             value={file}
-            onChange={setFile}
+            onChange={setPersistedFile}
             options={toSegmentOptions(FILES)}
           />
         </FilterGroup>
@@ -174,7 +220,7 @@ export default function LogsPage() {
           <Segmented
             className={segmentedClass}
             value={level}
-            onChange={setLevel}
+            onChange={setPersistedLevel}
             options={toSegmentOptions(LEVELS)}
           />
         </FilterGroup>
@@ -183,7 +229,7 @@ export default function LogsPage() {
           <Segmented
             className={segmentedClass}
             value={component}
-            onChange={setComponent}
+            onChange={setPersistedComponent}
             options={toSegmentOptions(COMPONENTS)}
           />
         </FilterGroup>
@@ -193,7 +239,7 @@ export default function LogsPage() {
             className={segmentedClass}
             value={String(lineCount)}
             onChange={(v) =>
-              setLineCount(Number(v) as (typeof LINE_COUNTS)[number])
+              setPersistedLineCount(Number(v) as (typeof LINE_COUNTS)[number])
             }
             options={LINE_COUNTS.map((n) => ({
               value: String(n),

@@ -37,6 +37,7 @@ _log = logging.getLogger(__name__)
 # threads from a wedged socket.
 _WS_WRITE_TIMEOUT_S = 10.0
 _WS_LOG_PAYLOAD_PREVIEW = 240
+_WS_NOT_CONNECTED = "WebSocket is not connected"
 
 # Keep starlette optional at import time; handle_ws uses the real class when
 # it's available and falls back to a generic Exception sentinel otherwise.
@@ -142,7 +143,13 @@ async def handle_ws(ws: Any) -> None:
     disconnect_reason = "not_connected"
 
     try:
-        await ws.accept()
+        try:
+            await ws.accept()
+        except (_WebSocketDisconnect, RuntimeError) as exc:
+            if isinstance(exc, RuntimeError) and _WS_NOT_CONNECTED not in str(exc):
+                raise
+            disconnect_reason = "client_disconnect_before_accept"
+            return
         disconnect_reason = "connected"
         _log.info("ws accepted peer=%s", peer)
 
@@ -173,6 +180,13 @@ async def handle_ws(ws: Any) -> None:
                     f"code={getattr(exc, 'code', None)},"
                     f"reason={getattr(exc, 'reason', None)})"
                 )
+                break
+            except RuntimeError as exc:
+                if _WS_NOT_CONNECTED in str(exc):
+                    disconnect_reason = "client_disconnect_not_connected"
+                    break
+                disconnect_reason = "receive_failed"
+                _log.exception("ws receive failed peer=%s", peer)
                 break
             except Exception:
                 disconnect_reason = "receive_failed"

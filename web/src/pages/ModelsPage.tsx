@@ -779,7 +779,7 @@ function ModelSettingsPanel({
 /* ──────────────────────────────────────────────────────────────────── */
 
 export default function ModelsPage() {
-  const [days, setDays] = useState(30);
+  const [days, setDays] = useState<(typeof PERIODS)[number]["days"]>(30);
   const [data, setData] = useState<ModelsAnalyticsResponse | null>(null);
   const [aux, setAux] = useState<AuxiliaryModelsResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -803,6 +803,28 @@ export default function ModelsPage() {
         // Default to hidden on any failure — safer than showing wrong numbers.
         setShowTokens(false);
       });
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getDashboardPreferences()
+      .then((prefs) => {
+        if (!cancelled) {
+          setDays(prefs.filters?.models?.days ?? 30);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const setPersistedDays = useCallback((next: (typeof PERIODS)[number]["days"]) => {
+    setDays(next);
+    void api
+      .patchDashboardPreferences({ filters: { models: { days: next } } })
+      .catch(() => {});
   }, []);
 
   const load = useCallback(() => {
@@ -842,7 +864,7 @@ export default function ModelsPage() {
             type="button"
             size="sm"
             outlined={days !== p.days}
-            onClick={() => setDays(p.days)}
+            onClick={() => setPersistedDays(p.days)}
             className="uppercase"
           >
             {p.label}
@@ -866,7 +888,7 @@ export default function ModelsPage() {
       setAfterTitle(null);
       setEnd(null);
     };
-  }, [days, loading, load, setAfterTitle, setEnd, t.common.refresh]);
+  }, [days, loading, load, setAfterTitle, setEnd, setPersistedDays, t.common.refresh]);
 
   useEffect(() => {
     load();

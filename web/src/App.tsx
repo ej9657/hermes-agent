@@ -94,7 +94,24 @@ import { api } from "@/lib/api";
 import type { StatusResponse } from "@/lib/api";
 
 function RootRedirect() {
-  return <Navigate to="/sessions" replace />;
+  const [target, setTarget] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getDashboardPreferences()
+      .then((prefs) => {
+        if (!cancelled) setTarget(prefs.default_route || "/sessions");
+      })
+      .catch(() => {
+        if (!cancelled) setTarget("/sessions");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return target ? <Navigate to={target} replace /> : null;
 }
 
 function UnknownRouteFallback({ pluginsLoading }: { pluginsLoading: boolean }) {
@@ -339,6 +356,7 @@ export default function App() {
   const { manifests, loading: pluginsLoading } = usePlugins();
   const { theme } = useTheme();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const lastPersistedRouteRef = useRef<string | null>(null);
   const closeMobile = useCallback(() => setMobileOpen(false), []);
 
   const [collapsed, setCollapsed] = useState(() => {
@@ -426,6 +444,12 @@ export default function App() {
     () => partitionSidebarNav(builtinNav, manifests),
     [builtinNav, manifests],
   );
+  const persistableRoutes = useMemo(() => {
+    return new Set([
+      ...sidebarNav.coreItems.map((item) => item.path),
+      ...sidebarNav.pluginItems.map((item) => item.path),
+    ]);
+  }, [sidebarNav]);
   const routes = useMemo(
     () => buildRoutes(builtinRoutes, manifests),
     [builtinRoutes, manifests],
@@ -442,6 +466,21 @@ export default function App() {
   );
 
   const layoutVariant = theme.layoutVariant ?? "standard";
+
+  useEffect(() => {
+    if (pluginsLoading || normalizedPath === "/" || !persistableRoutes.has(normalizedPath)) {
+      return;
+    }
+    if (lastPersistedRouteRef.current === normalizedPath) {
+      return;
+    }
+    lastPersistedRouteRef.current = normalizedPath;
+    void api
+      .patchDashboardPreferences({ default_route: normalizedPath })
+      .catch(() => {
+        lastPersistedRouteRef.current = null;
+      });
+  }, [normalizedPath, persistableRoutes, pluginsLoading]);
 
   useEffect(() => {
     if (!mobileOpen) return;

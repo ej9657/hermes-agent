@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Clock, Pause, Pencil, Play, Trash2, X, Zap } from "lucide-react";
 import { Badge } from "@nous-research/ui/ui/components/badge";
 import { Button } from "@nous-research/ui/ui/components/button";
@@ -120,6 +120,7 @@ export default function CronPage() {
   const [profiles, setProfiles] = useState<ProfileInfo[]>([]);
   const [selectedProfile, setSelectedProfile] = useState("all");
   const [loading, setLoading] = useState(true);
+  const preferencesLoadedRef = useRef(false);
   const { toast, showToast } = useToast();
   const { t, locale } = useI18n();
   const { setEnd } = usePageHeader();
@@ -183,6 +184,24 @@ export default function CronPage() {
     setEditDeliver(asText(job.deliver) || "local");
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getDashboardPreferences()
+      .then((prefs) => {
+        if (!cancelled) {
+          setSelectedProfile(prefs.filters?.cron?.profile || "all");
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) preferencesLoadedRef.current = true;
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const loadJobs = useCallback(() => {
     api
       .getCronJobs(selectedProfile)
@@ -203,6 +222,27 @@ export default function CronPage() {
   }, [loadJobs]);
 
   const scheduleString = buildScheduleString(scheduleState);
+
+  useEffect(() => {
+    if (
+      selectedProfile !== "all" &&
+      profiles.length > 0 &&
+      !profiles.some((profile) => profile.name === selectedProfile)
+    ) {
+      setSelectedProfile("all");
+      void api
+        .patchDashboardPreferences({ filters: { cron: { profile: "all" } } })
+        .catch(() => {});
+    }
+  }, [profiles, selectedProfile]);
+
+  const setPersistedSelectedProfile = useCallback((profile: string) => {
+    setSelectedProfile(profile);
+    if (!preferencesLoadedRef.current) return;
+    void api
+      .patchDashboardPreferences({ filters: { cron: { profile } } })
+      .catch(() => {});
+  }, []);
 
   const handleCreate = async () => {
     if (!prompt.trim() || !scheduleString) {
@@ -602,7 +642,7 @@ export default function CronPage() {
             <Select
               id="cron-profile-filter"
               value={selectedProfile}
-              onValueChange={(v) => setSelectedProfile(v)}
+              onValueChange={setPersistedSelectedProfile}
             >
               <SelectOption value="all">All profiles</SelectOption>
               {profiles.map((profile) => (
