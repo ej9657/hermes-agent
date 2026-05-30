@@ -210,8 +210,24 @@ class TestMcpToolCallProjection:
         msgs = CodexEventProjector().project(
             {"method": "item/completed", "params": {"item": item}}
         ).messages
-        assert msgs[0]["tool_calls"][0]["function"]["name"] == "mcp.obsidian.search_notes"
+        assert msgs[0]["tool_calls"][0]["function"]["name"] == "mcp_obsidian_search_notes"
         assert "found" in msgs[1]["content"]
+
+    def test_mcp_tool_call_sanitizes_response_function_name(self) -> None:
+        item = {
+            "type": "mcpToolCall",
+            "id": "m1",
+            "server": "github.com/openai",
+            "tool": "search.code",
+            "status": "completed",
+            "arguments": {},
+            "result": None,
+            "error": None,
+        }
+        msgs = CodexEventProjector().project(
+            {"method": "item/completed", "params": {"item": item}}
+        ).messages
+        assert msgs[0]["tool_calls"][0]["function"]["name"] == "mcp_github_com_openai_search_code"
 
     def test_mcp_error_surfaced(self) -> None:
         item = {

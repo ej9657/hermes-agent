@@ -1024,6 +1024,36 @@ def test_chat_messages_to_responses_input_accepts_call_pipe_fc_ids(monkeypatch):
     assert function_output["call_id"] == "call_pair123"
 
 
+def test_chat_messages_to_responses_input_sanitizes_persisted_function_names(monkeypatch):
+    agent = _build_agent(monkeypatch)
+    from agent.codex_responses_adapter import _chat_messages_to_responses_input
+    items = _chat_messages_to_responses_input(
+        [
+            {"role": "user", "content": "Search notes"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_mcp123",
+                        "type": "function",
+                        "function": {
+                            "name": "mcp.obsidian.search_notes",
+                            "arguments": "{}",
+                        },
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_mcp123", "content": '{"ok":true}'},
+        ]
+    )
+
+    function_call = next(item for item in items if item.get("type") == "function_call")
+
+    assert function_call["call_id"] == "call_mcp123"
+    assert function_call["name"] == "mcp_obsidian_search_notes"
+
+
 def test_preflight_codex_api_kwargs_strips_optional_function_call_id(monkeypatch):
     agent = _build_agent(monkeypatch)
     from agent.codex_responses_adapter import _preflight_codex_api_kwargs
@@ -1049,6 +1079,31 @@ def test_preflight_codex_api_kwargs_strips_optional_function_call_id(monkeypatch
     fn_call = next(item for item in preflight["input"] if item.get("type") == "function_call")
     assert fn_call["call_id"] == "call_good"
     assert "id" not in fn_call
+
+
+def test_preflight_codex_api_kwargs_sanitizes_replayed_function_name(monkeypatch):
+    agent = _build_agent(monkeypatch)
+    from agent.codex_responses_adapter import _preflight_codex_api_kwargs
+    preflight = _preflight_codex_api_kwargs(
+        {
+            "model": "gpt-5-codex",
+            "instructions": "You are Hermes.",
+            "input": [
+                {"role": "user", "content": "hi"},
+                {
+                    "type": "function_call",
+                    "call_id": "call_mcp",
+                    "name": "mcp.obsidian.search_notes",
+                    "arguments": "{}",
+                },
+            ],
+            "tools": [],
+            "store": False,
+        }
+    )
+
+    fn_call = next(item for item in preflight["input"] if item.get("type") == "function_call")
+    assert fn_call["name"] == "mcp_obsidian_search_notes"
 
 
 def test_preflight_codex_api_kwargs_rejects_function_call_output_without_call_id(monkeypatch):
