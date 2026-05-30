@@ -263,7 +263,7 @@ class TestFastModeRouting(unittest.TestCase):
 class TestAnthropicFastMode(unittest.TestCase):
     """Verify Anthropic Fast Mode model support and override resolution."""
 
-    def test_anthropic_opus_supported(self):
+    def test_anthropic_opus_46_supported(self):
         from hermes_cli.models import model_supports_fast_mode
 
         # Native Anthropic format (hyphens)
@@ -285,8 +285,10 @@ class TestAnthropicFastMode(unittest.TestCase):
         assert model_supports_fast_mode("claude-sonnet-4-6") is False
         assert model_supports_fast_mode("claude-sonnet-4.6") is False
         assert model_supports_fast_mode("claude-haiku-4-5") is False
+        assert model_supports_fast_mode("claude-opus-4-8") is False
         assert model_supports_fast_mode("claude-opus-4-7") is False
         assert model_supports_fast_mode("anthropic/claude-sonnet-4.6") is False
+        assert model_supports_fast_mode("anthropic/claude-opus-4-8") is False
         assert model_supports_fast_mode("anthropic/claude-opus-4-7") is False
 
     def test_non_claude_models_not_anthropic_fast(self):
@@ -314,12 +316,13 @@ class TestAnthropicFastMode(unittest.TestCase):
         assert result == {"speed": "fast"}
 
     def test_resolve_overrides_returns_none_for_unsupported_claude(self):
-        """Opus 4.7 and other Claude models don't support fast mode (API 400s).
+        """Opus 4.8, Opus 4.7, and other Claude models don't support fast mode.
 
         Per Anthropic docs, fast mode is currently Opus 4.6 only.
         """
         from hermes_cli.models import resolve_fast_mode_overrides
 
+        assert resolve_fast_mode_overrides("claude-opus-4-8") is None
         assert resolve_fast_mode_overrides("claude-opus-4-7") is None
         assert resolve_fast_mode_overrides("claude-sonnet-4-6") is None
         assert resolve_fast_mode_overrides("claude-haiku-4-5") is None
@@ -332,7 +335,7 @@ class TestAnthropicFastMode(unittest.TestCase):
         assert result == {"service_tier": "priority"}
 
     def test_is_anthropic_fast_model(self):
-        """Fast mode is currently Opus 4.6 only — other Claude variants must be excluded."""
+        """Fast mode is supported on Opus 4.6 only."""
         from hermes_cli.models import _is_anthropic_fast_model
 
         # Supported: Opus 4.6 in any form
@@ -342,7 +345,12 @@ class TestAnthropicFastMode(unittest.TestCase):
         assert _is_anthropic_fast_model("claude-opus-4.6:fast") is True
 
         # Unsupported per Anthropic API contract — would 400 if we sent speed=fast
+        assert _is_anthropic_fast_model("claude-opus-4-8") is False
+        assert _is_anthropic_fast_model("claude-opus-4.8") is False
+        assert _is_anthropic_fast_model("anthropic/claude-opus-4-8") is False
         assert _is_anthropic_fast_model("claude-opus-4-7") is False
+        assert _is_anthropic_fast_model("claude-opus-4.7") is False
+        assert _is_anthropic_fast_model("anthropic/claude-opus-4-7") is False
         assert _is_anthropic_fast_model("claude-sonnet-4-6") is False
         assert _is_anthropic_fast_model("claude-haiku-4-5") is False
 
@@ -359,7 +367,7 @@ class TestAnthropicFastMode(unittest.TestCase):
         assert cli_mod.HermesCLI._fast_command_available(stub) is True
 
     def test_fast_command_hidden_for_anthropic_sonnet(self):
-        """Sonnet doesn't support fast mode (Opus 4.6 only) — /fast must be hidden."""
+        """Sonnet doesn't support fast mode — /fast must be hidden."""
         cli_mod = _import_cli()
         stub = SimpleNamespace(
             provider="anthropic", requested_provider="anthropic",
@@ -367,8 +375,17 @@ class TestAnthropicFastMode(unittest.TestCase):
         )
         assert cli_mod.HermesCLI._fast_command_available(stub) is False
 
+    def test_fast_command_hidden_for_anthropic_opus_48(self):
+        """Opus 4.8 is available, but /fast stays hidden until supported."""
+        cli_mod = _import_cli()
+        stub = SimpleNamespace(
+            provider="anthropic", requested_provider="anthropic",
+            model="claude-opus-4-8", agent=None,
+        )
+        assert cli_mod.HermesCLI._fast_command_available(stub) is False
+
     def test_fast_command_hidden_for_anthropic_opus_47(self):
-        """Opus 4.7 doesn't support fast mode — /fast must be hidden."""
+        """Opus 4.7 does not support fast mode — /fast should be hidden."""
         cli_mod = _import_cli()
         stub = SimpleNamespace(
             provider="anthropic", requested_provider="anthropic",
