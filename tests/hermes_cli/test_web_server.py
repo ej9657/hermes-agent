@@ -207,6 +207,123 @@ class TestWebServerEndpoints:
         defaults = resp.json()
         assert "model" in defaults
 
+    def test_dashboard_preferences_round_trip(self):
+        from hermes_cli.config import load_config
+
+        resp = self.client.get("/api/dashboard/preferences")
+        assert resp.status_code == 200
+        assert resp.json() == {
+            "default_route": "/sessions",
+            "chat": {"sidebar_open": True, "active_panel": "tools"},
+            "filters": {
+                "cron": {"profile": "all"},
+                "models": {"days": 30},
+                "logs": {
+                    "file": "agent",
+                    "level": "ALL",
+                    "component": "all",
+                    "line_count": 100,
+                },
+            },
+        }
+
+        resp = self.client.patch(
+            "/api/dashboard/preferences",
+            json={
+                "default_route": "/chat?resume=abc",
+                "chat": {"sidebar_open": False, "active_panel": "session"},
+                "filters": {
+                    "cron": {"profile": "research"},
+                    "models": {"days": 90},
+                    "logs": {
+                        "file": "gateway",
+                        "level": "ERROR",
+                        "component": "cron",
+                        "line_count": 500,
+                    },
+                },
+            },
+        )
+
+        assert resp.status_code == 200
+        assert resp.json() == {
+            "default_route": "/chat",
+            "chat": {"sidebar_open": False, "active_panel": "session"},
+            "filters": {
+                "cron": {"profile": "research"},
+                "models": {"days": 90},
+                "logs": {
+                    "file": "gateway",
+                    "level": "ERROR",
+                    "component": "cron",
+                    "line_count": 500,
+                },
+            },
+        }
+
+        config = load_config()
+        assert config["dashboard"]["preferences"] == {
+            "default_route": "/chat",
+            "chat": {"sidebar_open": False, "active_panel": "session"},
+            "filters": {
+                "cron": {"profile": "research"},
+                "models": {"days": 90},
+                "logs": {
+                    "file": "gateway",
+                    "level": "ERROR",
+                    "component": "cron",
+                    "line_count": 500,
+                },
+            },
+        }
+
+    def test_dashboard_preferences_reject_reserved_route(self):
+        resp = self.client.patch(
+            "/api/dashboard/preferences",
+            json={"default_route": "/api/status"},
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["default_route"] == "/sessions"
+
+    def test_dashboard_preferences_reject_unknown_chat_panel(self):
+        resp = self.client.patch(
+            "/api/dashboard/preferences",
+            json={"chat": {"active_panel": "unknown"}},
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["chat"]["active_panel"] == "tools"
+
+    def test_dashboard_preferences_reject_unknown_filters(self):
+        resp = self.client.patch(
+            "/api/dashboard/preferences",
+            json={
+                "filters": {
+                    "cron": {"profile": "../bad"},
+                    "models": {"days": 365},
+                    "logs": {
+                        "file": "private",
+                        "level": "TRACE",
+                        "component": "database",
+                        "line_count": 10000,
+                    },
+                },
+            },
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["filters"] == {
+            "cron": {"profile": "all"},
+            "models": {"days": 30},
+            "logs": {
+                "file": "agent",
+                "level": "ALL",
+                "component": "all",
+                "line_count": 100,
+            },
+        }
+
     def test_get_env_vars(self):
         resp = self.client.get("/api/env")
         assert resp.status_code == 200
@@ -2445,4 +2562,3 @@ class TestDashboardPluginStaticAssetAllowlist:
         # 403 traversal-blocked OR 404 (depending on URL decode order)
         # — never 200.
         assert resp.status_code in (403, 404)
-

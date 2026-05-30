@@ -504,6 +504,14 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name }),
     }),
+  getDashboardPreferences: () =>
+    fetchJSON<DashboardPreferences>("/api/dashboard/preferences"),
+  patchDashboardPreferences: (body: DashboardPreferencesPatch) =>
+    fetchJSON<DashboardPreferences>("/api/dashboard/preferences", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
 };
 
 /** Identity payload returned by ``GET /api/auth/me`` (Phase 7).
@@ -544,6 +552,55 @@ export interface ActionStatusResponse {
   name: string;
   pid: number | null;
   running: boolean;
+}
+
+export interface DashboardPreferences {
+  default_route: string;
+  chat: {
+    sidebar_open: boolean;
+    active_panel: ChatSidebarPanel;
+  };
+  filters?: Partial<{
+    cron: Partial<DashboardCronFilterPreferences>;
+    models: Partial<DashboardModelsFilterPreferences>;
+    logs: Partial<DashboardLogsFilterPreferences>;
+  }>;
+}
+
+export interface DashboardPreferencesPatch {
+  default_route?: string;
+  chat?: {
+    sidebar_open?: boolean;
+    active_panel?: ChatSidebarPanel;
+  };
+  filters?: Partial<{
+    cron: Partial<DashboardCronFilterPreferences>;
+    models: Partial<DashboardModelsFilterPreferences>;
+    logs: Partial<DashboardLogsFilterPreferences>;
+  }>;
+}
+
+export type ChatSidebarPanel = "tools" | "session";
+
+export interface DashboardFilterPreferences {
+  cron: DashboardCronFilterPreferences;
+  models: DashboardModelsFilterPreferences;
+  logs: DashboardLogsFilterPreferences;
+}
+
+export interface DashboardCronFilterPreferences {
+  profile: string;
+}
+
+export interface DashboardModelsFilterPreferences {
+  days: 7 | 30 | 90;
+}
+
+export interface DashboardLogsFilterPreferences {
+  file: "agent" | "errors" | "gateway";
+  level: "ALL" | "DEBUG" | "INFO" | "WARNING" | "ERROR";
+  component: "all" | "gateway" | "agent" | "tools" | "cli" | "cron";
+  line_count: 50 | 100 | 200 | 500;
 }
 
 export interface PlatformStatus {
