@@ -38,6 +38,7 @@ Usage:
     hermes update              Update to latest version
     hermes uninstall           Uninstall Hermes Agent
     hermes acp                 Run as an ACP server for editor integration
+    hermes claude-review       Review current git diff with Claude Code CLI
     hermes sessions browse     Interactive session picker with search
 
     hermes claw migrate --dry-run  # Preview migration without changes
@@ -12028,8 +12029,8 @@ def cmd_logs(args):
 # to parse.
 _BUILTIN_SUBCOMMANDS = frozenset(
     {
-        "acp", "auth", "backup", "bundles", "checkpoints", "claw", "completion",
-        "computer-use",
+        "acp", "auth", "backup", "bundles", "checkpoints", "claw",
+        "claude-review", "codex-review", "completion", "computer-use",
         "config", "cron", "curator", "dashboard", "debug", "doctor",
         "dump", "fallback", "gateway", "hooks", "import", "insights",
         "gui", "desktop", "kanban", "login", "logout", "logs", "lsp", "mcp", "memory", "migrate",
@@ -12441,6 +12442,13 @@ def main():
         help="Disable TLS verification for Nous login (testing only)",
     )
     model_parser.set_defaults(func=cmd_model)
+
+    # =========================================================================
+    # claude-review / codex-review command - local Claude Code CLI reviewer
+    # =========================================================================
+    from hermes_cli.claude_review import register_parser as _register_claude_review_parser
+
+    _register_claude_review_parser(subparsers)
 
     # =========================================================================
     # fallback command — manage the fallback provider chain
