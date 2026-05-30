@@ -36,6 +36,7 @@ _log = logging.getLogger(__name__)
 # to flush a WS frame before we mark the transport dead. Protects handler
 # threads from a wedged socket.
 _WS_WRITE_TIMEOUT_S = 10.0
+_WS_NOT_CONNECTED = "WebSocket is not connected"
 
 # Keep starlette optional at import time; handle_ws uses the real class when
 # it's available and falls back to a generic Exception sentinel otherwise.
@@ -115,7 +116,12 @@ class WSTransport:
 
 async def handle_ws(ws: Any) -> None:
     """Run one WebSocket session. Wire-compatible with ``tui_gateway.entry``."""
-    await ws.accept()
+    try:
+        await ws.accept()
+    except (_WebSocketDisconnect, RuntimeError) as exc:
+        if isinstance(exc, RuntimeError) and _WS_NOT_CONNECTED not in str(exc):
+            raise
+        return
 
     transport = WSTransport(ws, asyncio.get_running_loop())
 
@@ -135,6 +141,10 @@ async def handle_ws(ws: Any) -> None:
             try:
                 raw = await ws.receive_text()
             except _WebSocketDisconnect:
+                break
+            except RuntimeError as exc:
+                if _WS_NOT_CONNECTED not in str(exc):
+                    raise
                 break
 
             line = raw.strip()

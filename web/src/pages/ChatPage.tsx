@@ -31,7 +31,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useSearchParams } from "react-router-dom";
 
-import { ChatSidebar } from "@/components/ChatSidebar";
+import { ChatSidebar, type ChatSidebarPanel } from "@/components/ChatSidebar";
 import { usePageHeader } from "@/contexts/usePageHeader";
 import { useI18n } from "@/i18n";
 import { api } from "@/lib/api";
@@ -135,6 +135,9 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
   // Keying on the raw state would leak the body.overflow="hidden" across
   // tabs because the dep wouldn't change on tab switch.
   const [mobilePanelOpenRaw, setMobilePanelOpenRaw] = useState(false);
+  const [desktopSidebarOpen, setDesktopSidebarOpen] = useState(true);
+  const [sidebarActivePanel, setSidebarActivePanel] =
+    useState<ChatSidebarPanel>("tools");
   const mobilePanelOpen = isActive && mobilePanelOpenRaw;
   const { setEnd } = usePageHeader();
   const { t } = useI18n();
@@ -159,7 +162,10 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
   // treat the current resume target as part of the PTY identity and rebuild the
   // terminal session when it changes.
   const resumeParam = searchParams.get("resume");
-  const channel = useMemo(() => generateChannelId(), [resumeParam]);
+  const channel = useMemo(
+    () => `${resumeParam ? "resume" : "chat"}-${generateChannelId()}`,
+    [resumeParam],
+  );
 
   useEffect(() => {
     if (!resumeParam) return;
@@ -192,6 +198,22 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
     sync();
     mql.addEventListener("change", sync);
     return () => mql.removeEventListener("change", sync);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getDashboardPreferences()
+      .then((prefs) => {
+        if (!cancelled) {
+          setDesktopSidebarOpen(prefs.chat.sidebar_open !== false);
+          setSidebarActivePanel(prefs.chat.active_panel ?? "tools");
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -713,6 +735,30 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
     };
   }, [isActive]);
 
+  const setPersistedDesktopSidebarOpen = useCallback((next: boolean) => {
+    setDesktopSidebarOpen(next);
+    void api
+      .patchDashboardPreferences({ chat: { sidebar_open: next } })
+      .catch(() => {});
+    requestAnimationFrame(() => syncMetricsRef.current?.());
+  }, []);
+
+  const setPersistedSidebarActivePanel = useCallback(
+    (next: ChatSidebarPanel) => {
+      setSidebarActivePanel(next);
+      void api
+        .patchDashboardPreferences({ chat: { active_panel: next } })
+        .catch(() => {});
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!isActive || narrow) return;
+    const raf = requestAnimationFrame(() => syncMetricsRef.current?.());
+    return () => cancelAnimationFrame(raf);
+  }, [desktopSidebarOpen, isActive, narrow]);
+
   // Layout:
   //   outer flex column — sits inside the dashboard's content area
   //   row split — terminal pane (flex-1) + sidebar (fixed width, lg+)
@@ -795,7 +841,11 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
               "border-t border-current/10",
             )}
           >
-            <ChatSidebar channel={channel} />
+            <ChatSidebar
+              channel={channel}
+              activePanel={sidebarActivePanel}
+              onActivePanelChange={setPersistedSidebarActivePanel}
+            />
           </div>
         </div>
       </>,
@@ -853,9 +903,43 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
               </span>
             </span>
           </Button>
+
+          {!narrow && (
+            <Button
+              ghost
+              onClick={() =>
+                setPersistedDesktopSidebarOpen(!desktopSidebarOpen)
+              }
+              title={
+                desktopSidebarOpen
+                  ? "Hide model/tools sidebar"
+                  : "Show model/tools sidebar"
+              }
+              aria-label={
+                desktopSidebarOpen
+                  ? "Hide model/tools sidebar"
+                  : "Show model/tools sidebar"
+              }
+              aria-controls="chat-side-panel"
+              aria-pressed={desktopSidebarOpen}
+              className={cn(
+                "absolute right-2 top-2 z-10 rounded border border-current/30",
+                "bg-black/20 p-1.5 backdrop-blur-sm",
+                "opacity-70 transition-opacity duration-150 hover:border-current/60 hover:opacity-100",
+                "sm:right-3 sm:top-3 lg:right-4 lg:top-4",
+              )}
+              style={{ color: TERMINAL_THEME.foreground }}
+            >
+              {desktopSidebarOpen ? (
+                <X className="h-3.5 w-3.5" />
+              ) : (
+                <PanelRight className="h-3.5 w-3.5" />
+              )}
+            </Button>
+          )}
         </div>
 
-        {!narrow && (
+        {!narrow && desktopSidebarOpen && (
           <div
             id="chat-side-panel"
             role="complementary"
@@ -863,7 +947,11 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
             className="flex min-h-0 shrink-0 flex-col overflow-hidden lg:h-full lg:w-80"
           >
             <div className="min-h-0 flex-1 overflow-hidden">
-              <ChatSidebar channel={channel} />
+              <ChatSidebar
+                channel={channel}
+                activePanel={sidebarActivePanel}
+                onActivePanelChange={setPersistedSidebarActivePanel}
+              />
             </div>
           </div>
         )}
