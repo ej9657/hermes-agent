@@ -15,6 +15,7 @@ import importlib.util
 import json
 import logging
 import os
+import re
 import secrets
 import stat
 import subprocess
@@ -921,6 +922,204 @@ async def get_defaults():
 @app.get("/api/config/schema")
 async def get_schema():
     return {"fields": CONFIG_SCHEMA, "category_order": _CATEGORY_ORDER}
+
+
+_DASHBOARD_DEFAULT_ROUTE = "/sessions"
+_DASHBOARD_CHAT_DEFAULT_PANEL = "tools"
+_DASHBOARD_CHAT_PANELS: Tuple[str, ...] = ("tools", "session")
+_DASHBOARD_FILTER_PROFILE_DEFAULT = "all"
+_DASHBOARD_FILTER_PROFILE_RE = re.compile(r"^[A-Za-z0-9_.-]{1,80}$")
+_DASHBOARD_MODEL_DAYS_DEFAULT = 30
+_DASHBOARD_MODEL_DAYS: Tuple[int, ...] = (7, 30, 90)
+_DASHBOARD_LOG_FILES: Tuple[str, ...] = ("agent", "errors", "gateway")
+_DASHBOARD_LOG_LEVELS: Tuple[str, ...] = ("ALL", "DEBUG", "INFO", "WARNING", "ERROR")
+_DASHBOARD_LOG_COMPONENTS: Tuple[str, ...] = ("all", "gateway", "agent", "tools", "cli", "cron")
+_DASHBOARD_LOG_LINE_COUNTS: Tuple[int, ...] = (50, 100, 200, 500)
+_DASHBOARD_RESERVED_ROUTE_PREFIXES: Tuple[str, ...] = (
+    "/api",
+    "/auth",
+    "/dashboard-plugins",
+    "/login",
+)
+
+
+def _clean_dashboard_route(value: Any) -> str:
+    """Return a dashboard SPA route safe to persist as the start route."""
+    if not isinstance(value, str):
+        return _DASHBOARD_DEFAULT_ROUTE
+    route = value.strip().split("?", 1)[0].split("#", 1)[0]
+    if (
+        not route
+        or not route.startswith("/")
+        or route.startswith("//")
+        or "\\" in route
+        or "://" in route
+        or any(ch.isspace() for ch in route)
+        or len(route) > 160
+    ):
+        return _DASHBOARD_DEFAULT_ROUTE
+    if route == "/":
+        return _DASHBOARD_DEFAULT_ROUTE
+    if any(
+        route == prefix or route.startswith(f"{prefix}/")
+        for prefix in _DASHBOARD_RESERVED_ROUTE_PREFIXES
+    ):
+        return _DASHBOARD_DEFAULT_ROUTE
+    return route.rstrip("/") or _DASHBOARD_DEFAULT_ROUTE
+
+
+def _clean_dashboard_chat_panel(value: Any) -> str:
+    if value in _DASHBOARD_CHAT_PANELS:
+        return str(value)
+    return _DASHBOARD_CHAT_DEFAULT_PANEL
+
+
+def _clean_dashboard_filter_profile(value: Any) -> str:
+    if value == _DASHBOARD_FILTER_PROFILE_DEFAULT:
+        return _DASHBOARD_FILTER_PROFILE_DEFAULT
+    if isinstance(value, str) and _DASHBOARD_FILTER_PROFILE_RE.match(value):
+        return value
+    return _DASHBOARD_FILTER_PROFILE_DEFAULT
+
+
+def _clean_dashboard_choice(value: Any, allowed: Tuple[Any, ...], default: Any) -> Any:
+    return value if value in allowed else default
+
+
+def _normalise_dashboard_filter_preferences(raw: Any) -> Dict[str, Any]:
+    filters = raw if isinstance(raw, dict) else {}
+    cron = filters.get("cron") if isinstance(filters.get("cron"), dict) else {}
+    models = filters.get("models") if isinstance(filters.get("models"), dict) else {}
+    logs = filters.get("logs") if isinstance(filters.get("logs"), dict) else {}
+    return {
+        "cron": {
+            "profile": _clean_dashboard_filter_profile(cron.get("profile")),
+        },
+        "models": {
+            "days": _clean_dashboard_choice(
+                models.get("days"),
+                _DASHBOARD_MODEL_DAYS,
+                _DASHBOARD_MODEL_DAYS_DEFAULT,
+            ),
+        },
+        "logs": {
+            "file": _clean_dashboard_choice(logs.get("file"), _DASHBOARD_LOG_FILES, "agent"),
+            "level": _clean_dashboard_choice(logs.get("level"), _DASHBOARD_LOG_LEVELS, "ALL"),
+            "component": _clean_dashboard_choice(
+                logs.get("component"),
+                _DASHBOARD_LOG_COMPONENTS,
+                "all",
+            ),
+            "line_count": _clean_dashboard_choice(
+                logs.get("line_count"),
+                _DASHBOARD_LOG_LINE_COUNTS,
+                100,
+            ),
+        },
+    }
+
+
+def _normalise_dashboard_preferences(raw: Any) -> Dict[str, Any]:
+    """Normalise persisted dashboard preferences for the SPA contract."""
+    prefs = raw if isinstance(raw, dict) else {}
+    chat = prefs.get("chat") if isinstance(prefs.get("chat"), dict) else {}
+    return {
+        "default_route": _clean_dashboard_route(
+            prefs.get("default_route", _DASHBOARD_DEFAULT_ROUTE)
+        ),
+        "chat": {
+            "sidebar_open": chat.get("sidebar_open") is not False,
+            "active_panel": _clean_dashboard_chat_panel(chat.get("active_panel")),
+        },
+        "filters": _normalise_dashboard_filter_preferences(prefs.get("filters")),
+    }
+
+
+class DashboardPreferencesPatch(BaseModel):
+    default_route: Optional[str] = None
+    chat: Optional[Dict[str, Any]] = None
+    filters: Optional[Dict[str, Any]] = None
+
+
+@app.get("/api/dashboard/preferences")
+async def get_dashboard_preferences():
+    """Return operator UI preferences persisted under ``dashboard.preferences``."""
+    config = load_config()
+    return _normalise_dashboard_preferences(
+        cfg_get(config, "dashboard", "preferences", default={})
+    )
+
+
+@app.patch("/api/dashboard/preferences")
+async def patch_dashboard_preferences(body: DashboardPreferencesPatch):
+    """Patch operator UI preferences without touching runtime/session state."""
+    config = load_config()
+    dashboard = config.get("dashboard")
+    if not isinstance(dashboard, dict):
+        dashboard = {}
+    current = _normalise_dashboard_preferences(dashboard.get("preferences", {}))
+    dump = getattr(body, "model_dump", None)
+    patch = dump(exclude_unset=True) if callable(dump) else body.dict(exclude_unset=True)
+
+    if "default_route" in patch:
+        current["default_route"] = _clean_dashboard_route(patch.get("default_route"))
+
+    if "chat" in patch and isinstance(patch.get("chat"), dict):
+        chat_patch = patch["chat"]
+        if "sidebar_open" in chat_patch:
+            current["chat"]["sidebar_open"] = chat_patch.get("sidebar_open") is not False
+        if "active_panel" in chat_patch:
+            current["chat"]["active_panel"] = _clean_dashboard_chat_panel(
+                chat_patch.get("active_panel")
+            )
+
+    if "filters" in patch and isinstance(patch.get("filters"), dict):
+        filter_patch = patch["filters"]
+        if "cron" in filter_patch and isinstance(filter_patch.get("cron"), dict):
+            cron_patch = filter_patch["cron"]
+            if "profile" in cron_patch:
+                current["filters"]["cron"]["profile"] = _clean_dashboard_filter_profile(
+                    cron_patch.get("profile")
+                )
+        if "models" in filter_patch and isinstance(filter_patch.get("models"), dict):
+            models_patch = filter_patch["models"]
+            if "days" in models_patch:
+                current["filters"]["models"]["days"] = _clean_dashboard_choice(
+                    models_patch.get("days"),
+                    _DASHBOARD_MODEL_DAYS,
+                    _DASHBOARD_MODEL_DAYS_DEFAULT,
+                )
+        if "logs" in filter_patch and isinstance(filter_patch.get("logs"), dict):
+            logs_patch = filter_patch["logs"]
+            if "file" in logs_patch:
+                current["filters"]["logs"]["file"] = _clean_dashboard_choice(
+                    logs_patch.get("file"),
+                    _DASHBOARD_LOG_FILES,
+                    "agent",
+                )
+            if "level" in logs_patch:
+                current["filters"]["logs"]["level"] = _clean_dashboard_choice(
+                    logs_patch.get("level"),
+                    _DASHBOARD_LOG_LEVELS,
+                    "ALL",
+                )
+            if "component" in logs_patch:
+                current["filters"]["logs"]["component"] = _clean_dashboard_choice(
+                    logs_patch.get("component"),
+                    _DASHBOARD_LOG_COMPONENTS,
+                    "all",
+                )
+            if "line_count" in logs_patch:
+                current["filters"]["logs"]["line_count"] = _clean_dashboard_choice(
+                    logs_patch.get("line_count"),
+                    _DASHBOARD_LOG_LINE_COUNTS,
+                    100,
+                )
+
+    dashboard["preferences"] = current
+    config["dashboard"] = dashboard
+    save_config(config)
+    return current
 
 
 _EMPTY_MODEL_INFO: dict = {
@@ -3347,7 +3546,6 @@ async def get_models_analytics(days: int = 30):
 # though uvicorn binds to 127.0.0.1.
 # ---------------------------------------------------------------------------
 
-import re
 import asyncio
 
 # PTY bridge is POSIX-only (depends on fcntl/termios/ptyprocess).  On native

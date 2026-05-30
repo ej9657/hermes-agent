@@ -25,6 +25,7 @@
 
 import { Button } from "@nous-research/ui/ui/components/button";
 import { Badge } from "@nous-research/ui/ui/components/badge";
+import { Segmented } from "@nous-research/ui/ui/components/segmented";
 import { Card } from "@/components/ui/card";
 
 import { ModelPickerDialog } from "@/components/ModelPickerDialog";
@@ -71,10 +72,24 @@ const STATE_TONE: Record<
 
 interface ChatSidebarProps {
   channel: string;
+  activePanel: ChatSidebarPanel;
+  onActivePanelChange: (panel: ChatSidebarPanel) => void;
   className?: string;
 }
 
-export function ChatSidebar({ channel, className }: ChatSidebarProps) {
+export type ChatSidebarPanel = "tools" | "session";
+
+const SIDEBAR_PANEL_OPTIONS: Array<{ value: ChatSidebarPanel; label: string }> = [
+  { value: "tools", label: "tools" },
+  { value: "session", label: "session" },
+];
+
+export function ChatSidebar({
+  channel,
+  activePanel,
+  onActivePanelChange,
+  className,
+}: ChatSidebarProps) {
   // `version` bumps on reconnect; gw is derived so we never call setState
   // for it inside an effect (React 19's set-state-in-effect rule). The
   // counter is the dependency on purpose — it's not read in the memo body,
@@ -365,21 +380,51 @@ export function ChatSidebar({ channel, className }: ChatSidebarProps) {
         </Card>
       )}
 
-      <Card className="flex min-h-0 flex-none flex-col px-2 py-2">
-        <div className="text-display px-1 pb-2 text-xs tracking-wider text-text-tertiary">
-          tools
-        </div>
+      <Segmented
+        className="w-fit max-w-full flex-wrap justify-start self-start"
+        size="sm"
+        value={activePanel}
+        onChange={onActivePanelChange}
+        options={SIDEBAR_PANEL_OPTIONS}
+      />
 
-        <div className="flex min-h-0 flex-col gap-1.5">
-          {tools.length === 0 ? (
-            <div className="px-2 py-4 text-center text-xs text-text-secondary">
-              no tool calls yet
-            </div>
-          ) : (
-            tools.map((t) => <ToolCall key={t.id} tool={t} />)
-          )}
-        </div>
-      </Card>
+      {activePanel === "tools" ? (
+        <Card className="flex min-h-0 flex-none flex-col px-2 py-2">
+          <div className="text-display px-1 pb-2 text-xs tracking-wider text-text-tertiary">
+            tools
+          </div>
+
+          <div className="flex min-h-0 flex-col gap-1.5">
+            {tools.length === 0 ? (
+              <div className="px-2 py-4 text-center text-xs text-text-secondary">
+                no tool calls yet
+              </div>
+            ) : (
+              tools.map((t) => <ToolCall key={t.id} tool={t} />)
+            )}
+          </div>
+        </Card>
+      ) : (
+        <Card className="flex min-h-0 flex-none flex-col gap-2 px-3 py-3 text-xs">
+          <div className="text-display text-xs tracking-wider text-text-tertiary">
+            session
+          </div>
+          <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-2">
+            <dt className="text-text-tertiary">id</dt>
+            <dd className="min-w-0 truncate text-text-secondary" title={sessionId ?? undefined}>
+              {sessionId ?? "—"}
+            </dd>
+            <dt className="text-text-tertiary">provider</dt>
+            <dd className="min-w-0 truncate text-text-secondary" title={info.provider}>
+              {info.provider ?? "—"}
+            </dd>
+            <dt className="text-text-tertiary">cwd</dt>
+            <dd className="min-w-0 truncate text-text-secondary" title={info.cwd}>
+              {info.cwd ?? "—"}
+            </dd>
+          </dl>
+        </Card>
+      )}
 
       {modelOpen && canPickModel && sessionId && (
         <ModelPickerDialog
