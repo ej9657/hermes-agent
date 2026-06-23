@@ -1096,6 +1096,8 @@ SUPPORTED_DOCUMENT_TYPES = {
     ".pdf": "application/pdf",
     ".md": "text/markdown",
     ".txt": "text/plain",
+    ".html": "text/html",
+    ".htm": "text/html",
     ".csv": "text/csv",
     ".log": "text/plain",
     ".json": "application/json",
@@ -1113,6 +1115,23 @@ SUPPORTED_DOCUMENT_TYPES = {
     ".py": "text/plain",
     ".sh": "text/plain",
 }
+
+
+INLINE_TEXT_DOCUMENT_EXTENSIONS = frozenset({
+    ".cfg",
+    ".csv",
+    ".htm",
+    ".html",
+    ".ini",
+    ".json",
+    ".log",
+    ".md",
+    ".toml",
+    ".txt",
+    ".xml",
+    ".yaml",
+    ".yml",
+})
 
 
 # ---------------------------------------------------------------------------

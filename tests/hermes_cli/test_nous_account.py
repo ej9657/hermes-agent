@@ -144,6 +144,44 @@ def test_valid_jwt_missing_paid_access_is_unknown_not_paid(monkeypatch):
     assert info.is_free_tier is False
 
 
+def test_paid_tier_jwt_without_paid_access_uses_fresh_account_entitlement(monkeypatch):
+    token = _jwt(
+        {
+            "sub": "user_123",
+            "org_id": "org_123",
+            "client_id": "hermes-cli",
+            "exp": int(time.time()) + 900,
+            "subscription_tier": 3,
+            "tool_gateway_admin": False,
+        }
+    )
+    payload = _account_payload(
+        allowed=True,
+        subscription={
+            "plan": "Scale",
+            "tier": 3,
+            "monthly_charge": 50,
+            "current_period_end": "2026-05-14T00:00:00.000Z",
+            "credits_remaining": 40.38,
+            "rollover_credits": 0,
+        },
+        subscription_credits=40.38,
+        purchased_credits=0,
+    )
+    monkeypatch.setattr("hermes_cli.auth.get_provider_auth_state", lambda provider: _state(token))
+    monkeypatch.setattr("hermes_cli.auth.resolve_nous_access_token", lambda: "fresh-token")
+    monkeypatch.setattr("hermes_cli.nous_account._fetch_nous_account_info", lambda *a, **kw: payload)
+
+    info = get_nous_portal_account_info()
+
+    assert info.source == "account_api"
+    assert info.fresh is True
+    assert info.paid_service_access is True
+    assert info.tool_gateway_entitled is True
+    assert info.paid_service_access_info is not None
+    assert info.paid_service_access_info.subscription_tier == 3
+
+
 def test_expired_jwt_falls_back_to_fresh_account(monkeypatch):
     token = _jwt(
         {

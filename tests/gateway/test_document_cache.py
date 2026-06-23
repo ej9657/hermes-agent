@@ -7,16 +7,22 @@ Covers: get_document_cache_dir, cache_document_from_bytes,
 
 import os
 import time
+from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
+from gateway.config import PlatformConfig
 from gateway.platforms.base import (
+    INLINE_TEXT_DOCUMENT_EXTENSIONS,
     SUPPORTED_DOCUMENT_TYPES,
     cache_document_from_bytes,
     cleanup_document_cache,
     get_document_cache_dir,
 )
+from gateway.platforms.telegram import TelegramAdapter
 
 # ---------------------------------------------------------------------------
 # Fixture: redirect DOCUMENT_CACHE_DIR to a temp directory for every test
@@ -151,10 +157,94 @@ class TestSupportedDocumentTypes:
 
     @pytest.mark.parametrize(
         "ext",
-        [".pdf", ".md", ".txt", ".zip", ".docx", ".xlsx", ".pptx"],
+        [".pdf", ".md", ".txt", ".html", ".htm", ".zip", ".docx", ".xlsx", ".pptx"],
     )
     def test_expected_extensions_present(self, ext):
         assert ext in SUPPORTED_DOCUMENT_TYPES
+
+    @pytest.mark.parametrize("ext", [".html", ".htm", ".md", ".txt"])
+    def test_inline_text_extensions_are_supported_documents(self, ext):
+        assert ext in SUPPORTED_DOCUMENT_TYPES
+        assert ext in INLINE_TEXT_DOCUMENT_EXTENSIONS
+
+    def test_all_inline_text_extensions_are_supported_documents(self):
+        assert INLINE_TEXT_DOCUMENT_EXTENSIONS <= set(SUPPORTED_DOCUMENT_TYPES)
+
+
+class TestTelegramHtmlDocumentHandling:
+    @pytest.mark.asyncio
+    async def test_small_html_document_is_cached_and_injected_into_event_text(self):
+        html_bytes = b"<html><body><h1>Prompt Gallery</h1></body></html>"
+        document = _FakeTelegramDocument(
+            file_name="gallery.html",
+            mime_type="text/html",
+            file_size=len(html_bytes),
+            content=html_bytes,
+        )
+        message = _fake_telegram_message(document=document, caption="review this")
+        update = SimpleNamespace(message=message, update_id=123)
+        adapter = TelegramAdapter(PlatformConfig(enabled=True, token="***", extra={}))
+        adapter.handle_message = AsyncMock()
+
+        await adapter._handle_media_message(update, context=None)
+
+        adapter.handle_message.assert_awaited_once()
+        event = adapter.handle_message.await_args.args[0]
+        assert event.media_types == ["text/html"]
+        assert event.media_urls
+        assert Path(event.media_urls[0]).read_bytes() == html_bytes
+        assert event.text.startswith("[Content of gallery.html]:\n")
+        assert "<h1>Prompt Gallery</h1>" in event.text
+        assert event.text.endswith("\n\nreview this")
+
+
+class _FakeTelegramFile:
+    def __init__(self, content: bytes):
+        self._content = content
+        self.file_path = "gallery.html"
+
+    async def download_as_bytearray(self):
+        return bytearray(self._content)
+
+
+class _FakeTelegramDocument:
+    def __init__(self, *, file_name: str, mime_type: str, file_size: int, content: bytes):
+        self.file_name = file_name
+        self.mime_type = mime_type
+        self.file_size = file_size
+        self._content = content
+
+    async def get_file(self):
+        return _FakeTelegramFile(self._content)
+
+
+def _fake_telegram_message(*, document, caption: str = ""):
+    return SimpleNamespace(
+        audio=None,
+        caption=caption,
+        chat=SimpleNamespace(
+            id=42,
+            type="private",
+            title=None,
+            full_name="Erik",
+            is_forum=False,
+        ),
+        date=datetime.now(timezone.utc),
+        document=document,
+        forum_topic_created=None,
+        from_user=SimpleNamespace(id=7, full_name="Erik"),
+        is_topic_message=False,
+        media_group_id=None,
+        message_id=99,
+        message_thread_id=None,
+        photo=None,
+        quote=None,
+        reply_to_message=None,
+        sticker=None,
+        text="",
+        video=None,
+        voice=None,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -171,7 +261,12 @@ _PNG_1PX = bytes.fromhex(
 class TestCacheMediaBytes:
     def test_pdf_routes_to_document(self):
         from gateway.platforms.base import cache_media_bytes
-        result = cache_media_bytes(b"%PDF-1.4 body", filename="report.pdf", mime_type="application/pdf")
+
+        result = cache_media_bytes(
+            b"%PDF-1.4 body",
+            filename="report.pdf",
+            mime_type="application/pdf",
+        )
         assert result is not None
         assert result.kind == "document"
         assert result.media_type == "application/pdf"
@@ -181,7 +276,12 @@ class TestCacheMediaBytes:
 
     def test_png_routes_to_image(self):
         from gateway.platforms.base import cache_media_bytes
-        result = cache_media_bytes(_PNG_1PX, filename="photo.png", mime_type="image/png")
+
+        result = cache_media_bytes(
+            _PNG_1PX,
+            filename="photo.png",
+            mime_type="image/png",
+        )
         assert result is not None
         assert result.kind == "image"
         assert result.media_type == "image/png"
@@ -189,30 +289,56 @@ class TestCacheMediaBytes:
 
     def test_native_photo_without_filename_uses_default_kind(self):
         from gateway.platforms.base import cache_media_bytes
-        result = cache_media_bytes(_PNG_1PX, filename="", mime_type="", default_kind="image")
+
+        result = cache_media_bytes(
+            _PNG_1PX,
+            filename="",
+            mime_type="",
+            default_kind="image",
+        )
         assert result is not None
         assert result.kind == "image"
 
     def test_mp4_routes_to_video(self):
         from gateway.platforms.base import cache_media_bytes
-        result = cache_media_bytes(b"\x00\x00\x00\x18ftypmp42", filename="clip.mp4", mime_type="video/mp4")
+
+        result = cache_media_bytes(
+            b"\x00\x00\x00\x18ftypmp42",
+            filename="clip.mp4",
+            mime_type="video/mp4",
+        )
         assert result is not None
         assert result.kind == "video"
         assert result.media_type == "video/mp4"
 
     def test_mime_only_resolves_extension(self):
         from gateway.platforms.base import cache_media_bytes
-        result = cache_media_bytes(b"col1,col2\n1,2", filename="", mime_type="text/csv")
+
+        result = cache_media_bytes(
+            b"col1,col2\n1,2",
+            filename="",
+            mime_type="text/csv",
+        )
         assert result is not None
         assert result.kind == "document"
         assert result.media_type == "text/csv"
 
     def test_unsupported_document_returns_none(self):
         from gateway.platforms.base import cache_media_bytes
-        result = cache_media_bytes(b"MZ", filename="malware.exe", mime_type="application/x-msdownload")
+
+        result = cache_media_bytes(
+            b"MZ",
+            filename="malware.exe",
+            mime_type="application/x-msdownload",
+        )
         assert result is None
 
     def test_invalid_image_returns_none(self):
         from gateway.platforms.base import cache_media_bytes
-        result = cache_media_bytes(b"<html>not an image</html>", filename="x.png", mime_type="image/png")
+
+        result = cache_media_bytes(
+            b"<html>not an image</html>",
+            filename="x.png",
+            mime_type="image/png",
+        )
         assert result is None

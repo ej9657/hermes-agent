@@ -44,6 +44,7 @@ from gateway.platforms.base import (
     MessageType,
     ProcessingOutcome,
     SendResult,
+    INLINE_TEXT_DOCUMENT_EXTENSIONS,
     SUPPORTED_DOCUMENT_TYPES,
     is_host_excluded_by_no_proxy,
     resolve_proxy_url,
@@ -2513,21 +2514,8 @@ class SlackAdapter(BasePlatformAdapter):
                     # Inject small text-ish files directly into the prompt so
                     # snippets like JSON/YAML/configs are actually visible to the agent.
                     MAX_TEXT_INJECT_BYTES = 100 * 1024
-                    TEXT_INJECT_EXTENSIONS = {
-                        ".md",
-                        ".txt",
-                        ".csv",
-                        ".log",
-                        ".json",
-                        ".xml",
-                        ".yaml",
-                        ".yml",
-                        ".toml",
-                        ".ini",
-                        ".cfg",
-                    }
                     if (
-                        ext in TEXT_INJECT_EXTENSIONS
+                        ext in INLINE_TEXT_DOCUMENT_EXTENSIONS
                         and len(raw_bytes) <= MAX_TEXT_INJECT_BYTES
                     ):
                         try:
