@@ -7,16 +7,22 @@ Covers: get_document_cache_dir, cache_document_from_bytes,
 
 import os
 import time
+from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
+from gateway.config import PlatformConfig
 from gateway.platforms.base import (
+    INLINE_TEXT_DOCUMENT_EXTENSIONS,
     SUPPORTED_DOCUMENT_TYPES,
     cache_document_from_bytes,
     cleanup_document_cache,
     get_document_cache_dir,
 )
+from gateway.platforms.telegram import TelegramAdapter
 
 # ---------------------------------------------------------------------------
 # Fixture: redirect DOCUMENT_CACHE_DIR to a temp directory for every test
@@ -151,7 +157,91 @@ class TestSupportedDocumentTypes:
 
     @pytest.mark.parametrize(
         "ext",
-        [".pdf", ".md", ".txt", ".zip", ".docx", ".xlsx", ".pptx"],
+        [".pdf", ".md", ".txt", ".html", ".htm", ".zip", ".docx", ".xlsx", ".pptx"],
     )
     def test_expected_extensions_present(self, ext):
         assert ext in SUPPORTED_DOCUMENT_TYPES
+
+    @pytest.mark.parametrize("ext", [".html", ".htm", ".md", ".txt"])
+    def test_inline_text_extensions_are_supported_documents(self, ext):
+        assert ext in SUPPORTED_DOCUMENT_TYPES
+        assert ext in INLINE_TEXT_DOCUMENT_EXTENSIONS
+
+    def test_all_inline_text_extensions_are_supported_documents(self):
+        assert INLINE_TEXT_DOCUMENT_EXTENSIONS <= set(SUPPORTED_DOCUMENT_TYPES)
+
+
+class TestTelegramHtmlDocumentHandling:
+    @pytest.mark.asyncio
+    async def test_small_html_document_is_cached_and_injected_into_event_text(self):
+        html_bytes = b"<html><body><h1>Prompt Gallery</h1></body></html>"
+        document = _FakeTelegramDocument(
+            file_name="gallery.html",
+            mime_type="text/html",
+            file_size=len(html_bytes),
+            content=html_bytes,
+        )
+        message = _fake_telegram_message(document=document, caption="review this")
+        update = SimpleNamespace(message=message, update_id=123)
+        adapter = TelegramAdapter(PlatformConfig(enabled=True, token="***", extra={}))
+        adapter.handle_message = AsyncMock()
+
+        await adapter._handle_media_message(update, context=None)
+
+        adapter.handle_message.assert_awaited_once()
+        event = adapter.handle_message.await_args.args[0]
+        assert event.media_types == ["text/html"]
+        assert event.media_urls
+        assert Path(event.media_urls[0]).read_bytes() == html_bytes
+        assert event.text.startswith("[Content of gallery.html]:\n")
+        assert "<h1>Prompt Gallery</h1>" in event.text
+        assert event.text.endswith("\n\nreview this")
+
+
+class _FakeTelegramFile:
+    def __init__(self, content: bytes):
+        self._content = content
+        self.file_path = "gallery.html"
+
+    async def download_as_bytearray(self):
+        return bytearray(self._content)
+
+
+class _FakeTelegramDocument:
+    def __init__(self, *, file_name: str, mime_type: str, file_size: int, content: bytes):
+        self.file_name = file_name
+        self.mime_type = mime_type
+        self.file_size = file_size
+        self._content = content
+
+    async def get_file(self):
+        return _FakeTelegramFile(self._content)
+
+
+def _fake_telegram_message(*, document, caption: str = ""):
+    return SimpleNamespace(
+        audio=None,
+        caption=caption,
+        chat=SimpleNamespace(
+            id=42,
+            type="private",
+            title=None,
+            full_name="Erik",
+            is_forum=False,
+        ),
+        date=datetime.now(timezone.utc),
+        document=document,
+        forum_topic_created=None,
+        from_user=SimpleNamespace(id=7, full_name="Erik"),
+        is_topic_message=False,
+        media_group_id=None,
+        message_id=99,
+        message_thread_id=None,
+        photo=None,
+        quote=None,
+        reply_to_message=None,
+        sticker=None,
+        text="",
+        video=None,
+        voice=None,
+    )

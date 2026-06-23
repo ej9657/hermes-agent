@@ -509,8 +509,16 @@ def _info_from_valid_jwt(
     if exp is None or exp <= time.time() + max(0, int(min_jwt_ttl_seconds)):
         return None
 
-    paid_access = _coerce_bool(claims.get("paid_access"))
     subscription_tier = _coerce_int(claims.get("subscription_tier"))
+    paid_access = _coerce_bool(claims.get("paid_access"))
+    if paid_access is None and subscription_tier is not None and subscription_tier > 0:
+        # Older Nous Portal access tokens can carry paid subscription tier
+        # metadata while omitting the normalized paid_access entitlement used
+        # by Tool Gateway gating. Do not treat that JWT as authoritative;
+        # force callers onto /api/oauth/account, where paid_service_access is
+        # computed from the current subscription and usable credits.
+        return None
+
     access_info = NousPaidServiceAccessInfo(
         allowed=paid_access,
         paid_access=paid_access,

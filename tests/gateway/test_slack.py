@@ -858,6 +858,31 @@ class TestIncomingDocumentHandling:
         assert "# Title" in msg_event.text
 
     @pytest.mark.asyncio
+    async def test_html_document_injects_content(self, adapter):
+        """A .html file under 100KB should have its content injected."""
+        content = b"<html><body><h1>Prompt Gallery</h1></body></html>"
+
+        with patch.object(adapter, "_download_slack_file_bytes", new_callable=AsyncMock) as dl:
+            dl.return_value = content
+            event = self._make_event(
+                text="review this",
+                files=[{
+                    "mimetype": "text/html",
+                    "name": "gallery.html",
+                    "url_private_download": "https://files.slack.com/gallery.html",
+                    "size": len(content),
+                }],
+            )
+            await adapter._handle_slack_message(event)
+
+        msg_event = adapter.handle_message.call_args[0][0]
+        assert msg_event.message_type == MessageType.DOCUMENT
+        assert msg_event.media_types == ["text/html"]
+        assert "[Content of gallery.html]" in msg_event.text
+        assert "<h1>Prompt Gallery</h1>" in msg_event.text
+        assert "review this" in msg_event.text
+
+    @pytest.mark.asyncio
     async def test_json_snippet_injects_content(self, adapter):
         """A .json snippet should be treated as a text document and injected."""
         content = b'{"hello": "world", "count": 2}'

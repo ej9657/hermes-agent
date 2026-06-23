@@ -834,8 +834,27 @@ async def _send_telegram(token, chat_id, message, media_files=None, thread_id=No
     instead, bypassing MarkdownV2 conversion.
     """
     try:
-        from telegram import Bot
-        from telegram.constants import ParseMode
+        try:
+            from telegram import Bot
+            from telegram.constants import ParseMode
+        except ImportError as import_error:
+            try:
+                from tools.lazy_deps import ensure as _lazy_ensure
+                _lazy_ensure("platform.telegram", prompt=False)
+                from telegram import Bot
+                from telegram.constants import ParseMode
+            except Exception as lazy_error:
+                logger.warning(
+                    "send_message: Telegram dependency unavailable after lazy install attempt: %s",
+                    lazy_error,
+                )
+                return {
+                    "error": (
+                        "python-telegram-bot not installed. "
+                        "Run: uv pip install 'python-telegram-bot[webhooks]==22.6' "
+                        f"(or enable security.allow_lazy_installs). Details: {lazy_error or import_error}"
+                    )
+                }
 
         # Auto-detect HTML tags — if present, skip MarkdownV2 and send as HTML.
         # Inspired by github.com/ashaney — PR #1568.
