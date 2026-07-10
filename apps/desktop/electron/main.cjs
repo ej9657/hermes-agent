@@ -28,6 +28,11 @@ const { detectRemoteDisplay, isWindowsBinaryPathInWsl, isWslEnvironment } = requ
 const { runBootstrap } = require('./bootstrap-runner.cjs')
 const { canImportHermesCli, verifyHermesCli } = require('./backend-probes.cjs')
 const {
+  PINNED_DEVELOPER_UPDATE_ERROR,
+  pinnedDeveloperUpdateMessage,
+  resolvePinnedDeveloperRuntimeRoot
+} = require('./runtime-policy.cjs')
+const {
   DATA_URL_READ_MAX_BYTES,
   DEFAULT_FETCH_TIMEOUT_MS,
   TEXT_PREVIEW_SOURCE_MAX_BYTES,
@@ -1189,6 +1194,21 @@ async function resolveHealedBranch(updateRoot, branch) {
 }
 
 async function checkUpdates() {
+  const pinnedDeveloperRoot = resolvePinnedDeveloperRuntimeRoot({
+    activeRoot: ACTIVE_HERMES_ROOT,
+    overrideRoot: process.env.HERMES_DESKTOP_HERMES_ROOT
+  })
+
+  if (pinnedDeveloperRoot) {
+    return {
+      supported: false,
+      reason: PINNED_DEVELOPER_UPDATE_ERROR,
+      message: pinnedDeveloperUpdateMessage(pinnedDeveloperRoot),
+      hermesRoot: pinnedDeveloperRoot,
+      branch: readDesktopUpdateConfig().branch
+    }
+  }
+
   const updateRoot = resolveUpdateRoot()
   let { branch } = readDesktopUpdateConfig()
   const gitDir = path.join(updateRoot, '.git')
@@ -1285,6 +1305,30 @@ function resolveUpdaterBinary() {
 // Detection (checkUpdates / commit changelog / "N behind") stays in the UI;
 // only this apply action changed.
 async function applyUpdates(opts = {}) {
+  const pinnedDeveloperRoot = resolvePinnedDeveloperRuntimeRoot({
+    activeRoot: ACTIVE_HERMES_ROOT,
+    overrideRoot: process.env.HERMES_DESKTOP_HERMES_ROOT
+  })
+
+  if (pinnedDeveloperRoot) {
+    const message = pinnedDeveloperUpdateMessage(pinnedDeveloperRoot)
+
+    rememberLog(`[updates] refused managed update for pinned Developer runtime at ${pinnedDeveloperRoot}`)
+    emitUpdateProgress({
+      stage: 'error',
+      message,
+      error: PINNED_DEVELOPER_UPDATE_ERROR,
+      percent: null
+    })
+
+    return {
+      ok: false,
+      error: PINNED_DEVELOPER_UPDATE_ERROR,
+      message,
+      hermesRoot: pinnedDeveloperRoot
+    }
+  }
+
   if (updateInFlight) {
     throw new Error('An update is already in progress.')
   }
