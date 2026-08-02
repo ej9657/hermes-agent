@@ -232,6 +232,8 @@ def run_claude_review(
         model,
         "--permission-mode",
         permission_mode,
+        "--tools",
+        "",
         "--output-format",
         "text",
         "--no-session-persistence",

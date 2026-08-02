@@ -140,6 +140,8 @@ def test_run_claude_review_invokes_claude_cli_with_stdin(monkeypatch, tmp_path):
         "claude-opus-4-8",
         "--permission-mode",
         "plan",
+        "--tools",
+        "",
         "--output-format",
         "text",
         "--no-session-persistence",
