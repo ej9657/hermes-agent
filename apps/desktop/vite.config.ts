@@ -1,8 +1,12 @@
-import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
-import tailwindcss from '@tailwindcss/vite'
-import path from 'path'
 import fs from 'fs'
+import { fileURLToPath } from 'node:url'
+import path from 'path'
+
+import tailwindcss from '@tailwindcss/vite'
+import react from '@vitejs/plugin-react'
+import { defineConfig } from 'vite'
+
+const configDir = path.dirname(fileURLToPath(import.meta.url))
 
 // `hgui` symlinks a worktree's node_modules to the main checkout. Vite realpaths
 // those before enforcing server.fs.allow, so codicon/font assets resolve outside
@@ -18,9 +22,9 @@ const real = (p: string): string | null => {
 const fsAllow = [
   ...new Set(
     [
-      path.resolve(__dirname, '../..'),
-      real(path.resolve(__dirname, 'node_modules')),
-      real(path.resolve(__dirname, '../../node_modules'))
+      path.resolve(configDir, '../..'),
+      real(path.resolve(configDir, 'node_modules')),
+      real(path.resolve(configDir, '../../node_modules'))
     ].filter((p): p is string => p !== null)
   )
 ]
@@ -33,16 +37,16 @@ const fsAllow = [
 // the perf harness opts a production build back in with VITE_PERF_PROBE=1.
 const debugEntry = (command: string, env: Record<string, string>) =>
   command === 'serve' || env.VITE_PERF_PROBE === '1'
-    ? path.resolve(__dirname, './src/debug/dev-only.ts')
-    : path.resolve(__dirname, './src/debug/dev-only.noop.ts')
+    ? path.resolve(configDir, './src/debug/dev-only.ts')
+    : path.resolve(configDir, './src/debug/dev-only.noop.ts')
 
 // The emoji picker (frimousse) fetches `<emojibaseUrl>/<locale>/data.json` at
 // runtime. Its default is a CDN; Electron must work offline, so serve the
 // bundled emojibase-data package at a stable local path instead — middleware
 // in dev, emitted assets in the build. Only the files a locale actually needs.
 const emojibaseDir =
-  real(path.resolve(__dirname, 'node_modules/emojibase-data')) ??
-  real(path.resolve(__dirname, '../../node_modules/emojibase-data'))
+  real(path.resolve(configDir, 'node_modules/emojibase-data')) ??
+  real(path.resolve(configDir, '../../node_modules/emojibase-data'))
 
 const EMOJIBASE_PATH = /^[a-z-]+\/(data|messages|shortcodes\/emojibase)\.json$/
 
@@ -53,9 +57,16 @@ const emojibaseAssets = () => ({
   }) {
     server.middlewares.use('/emojibase', (req, res, next) => {
       const rel = (req.url ?? '').split('?')[0].replace(/^\/+/, '')
-      if (!emojibaseDir || !EMOJIBASE_PATH.test(rel)) return next()
+
+      if (!emojibaseDir || !EMOJIBASE_PATH.test(rel)) {
+        return next()
+      }
+
       fs.readFile(path.join(emojibaseDir, rel), (err: unknown, buf: Buffer) => {
-        if (err) return next()
+        if (err) {
+          return next()
+        }
+
         res.setHeader('Content-Type', 'application/json')
         res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
         res.end(buf)
@@ -63,7 +74,10 @@ const emojibaseAssets = () => ({
     })
   },
   generateBundle(this: { emitFile: (asset: { type: 'asset'; fileName: string; source: Uint8Array }) => void }) {
-    if (!emojibaseDir) return
+    if (!emojibaseDir) {
+      return
+    }
+
     for (const rel of ['en/data.json', 'en/messages.json', 'en/shortcodes/emojibase.json']) {
       this.emitFile({
         type: 'asset',
@@ -99,13 +113,13 @@ export default defineConfig(({ command }) => ({
     //     bundle hit ~28 MB that eval was ~1s of launch on an M-series.
     //   · Default splitting emits a chunk per shiki grammar/theme — thousands
     //     of files, which electron-builder OOMs scanning (#38888).
-    // `advancedChunks` is the middle ground: heavyweight libraries merge into
+    // `codeSplitting` is the middle ground: heavyweight libraries merge into
     // a handful of named vendor chunks loaded on first use, app-level dynamic
     // imports stay lazy, and the file count stays in the tens.
     chunkSizeWarningLimit: 25000,
     rolldownOptions: {
       output: {
-        advancedChunks: {
+        codeSplitting: {
           groups: [
             // Shared foundations FIRST (first match wins): an unmatched
             // module shared by the entry and a heavy chunk gets merged INTO
@@ -143,14 +157,14 @@ export default defineConfig(({ command }) => ({
   resolve: {
     alias: {
       '@/debug/dev-only': debugEntry(command, process.env as Record<string, string>),
-      '@': path.resolve(__dirname, './src'),
-      '@hermes/plugin-sdk': path.resolve(__dirname, './src/sdk/index.ts'),
-      '@hermes/shared/billing': path.resolve(__dirname, '../shared/src/billing-types.ts'),
-      '@hermes/shared': path.resolve(__dirname, '../shared/src'),
-      react: path.resolve(__dirname, '../../node_modules/react'),
-      'react-dom': path.resolve(__dirname, '../../node_modules/react-dom'),
-      'react/jsx-dev-runtime': path.resolve(__dirname, '../../node_modules/react/jsx-dev-runtime.js'),
-      'react/jsx-runtime': path.resolve(__dirname, '../../node_modules/react/jsx-runtime.js')
+      '@': path.resolve(configDir, './src'),
+      '@hermes/plugin-sdk': path.resolve(configDir, './src/sdk/index.ts'),
+      '@hermes/shared/billing': path.resolve(configDir, '../shared/src/billing-types.ts'),
+      '@hermes/shared': path.resolve(configDir, '../shared/src'),
+      react: path.resolve(configDir, '../../node_modules/react'),
+      'react-dom': path.resolve(configDir, '../../node_modules/react-dom'),
+      'react/jsx-dev-runtime': path.resolve(configDir, '../../node_modules/react/jsx-dev-runtime.js'),
+      'react/jsx-runtime': path.resolve(configDir, '../../node_modules/react/jsx-runtime.js')
     },
     dedupe: ['react', 'react-dom']
   },

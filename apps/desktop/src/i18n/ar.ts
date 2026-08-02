@@ -604,7 +604,7 @@ export const ar = defineLocale({
       lastChecked: age => `آخر تحقق ${age}`,
       justNowSuffix: 'الآن',
       automaticUpdates: 'التحديثات التلقائية',
-      automaticUpdatesDesc: 'اسمح لـ Hermes بالتحقق من التحديثات وتثبيتها.',
+      automaticUpdatesDesc: 'عند التفعيل، يتحقق Hermes من التحديثات في الخلفية ويثبتها عندما تكون النافذة غير نشطة.',
       branchCommit: (branch, commit) => `${branch} عند ${commit}`,
       never: 'أبدا',
       justNow: 'الآن',

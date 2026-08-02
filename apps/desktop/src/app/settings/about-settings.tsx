@@ -4,10 +4,14 @@ import { useEffect, useState } from 'react'
 import { BrandMark } from '@/components/brand-mark'
 import { Button } from '@/components/ui/button'
 import { Codicon } from '@/components/ui/codicon'
+import { Switch } from '@/components/ui/switch'
 import { type Translations, useI18n } from '@/i18n'
 import { CheckCircle2, ExternalLink, Loader2, RefreshCw } from '@/lib/icons'
 import { cn } from '@/lib/utils'
 import {
+  $automaticUpdatesEnabled,
+  $automaticUpdatesLoading,
+  $automaticUpdatesSaving,
   $desktopVersion,
   $updateApply,
   $updateChecking,
@@ -15,6 +19,7 @@ import {
   checkUpdates,
   openUpdatesWindow,
   refreshDesktopVersion,
+  setAutomaticUpdatesEnabled,
   startActiveUpdate
 } from '@/store/updates'
 
@@ -52,6 +57,9 @@ export function AboutSettings() {
   const status = useStore($updateStatus)
   const apply = useStore($updateApply)
   const checking = useStore($updateChecking)
+  const automaticUpdates = useStore($automaticUpdatesEnabled)
+  const automaticUpdatesLoading = useStore($automaticUpdatesLoading)
+  const automaticUpdatesSaving = useStore($automaticUpdatesSaving)
   const [justChecked, setJustChecked] = useState(false)
 
   // The version atom is loaded once at app boot, which makes About show a
@@ -171,6 +179,14 @@ export function AboutSettings() {
         </div>
 
         <ListRow
+          action={
+            <Switch
+              aria-label={a.automaticUpdates}
+              checked={automaticUpdates}
+              disabled={automaticUpdatesLoading || automaticUpdatesSaving}
+              onCheckedChange={enabled => void setAutomaticUpdatesEnabled(enabled)}
+            />
+          }
           description={a.automaticUpdatesDesc}
           hint={a.branchCommit(status?.branch ?? 'unknown', status?.currentSha?.slice(0, 7) ?? 'unknown')}
           title={a.automaticUpdates}

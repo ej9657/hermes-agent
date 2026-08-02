@@ -49,11 +49,16 @@ const {
   $backendUpdateApply,
   reportBackendContract,
   applyUpdates,
+  $automaticUpdatesEnabled,
+  $automaticUpdatesLoading,
+  $automaticUpdatesSaving,
   $updateApply,
   $updateOverlayOpen,
   $updateOverlayTarget,
   requestActiveUpdate,
   resetUpdateApplyState,
+  refreshAutomaticUpdatePreference,
+  setAutomaticUpdatesEnabled,
   startUpdatePoller,
   stopUpdatePoller,
   $updateStatus
@@ -553,13 +558,19 @@ describe('applyBackendUpdate recovery', () => {
 
 describe('startUpdatePoller', () => {
   const checkMock = vi.fn()
+  const applyMock = vi.fn()
+  const getPreferencesMock = vi.fn()
   const onProgressMock = vi.fn()
+  const setAutomaticMock = vi.fn()
   const listeners: Record<string, Function> = {}
 
   beforeEach(() => {
     storage.clear()
     checkMock.mockReset()
+    applyMock.mockReset()
+    getPreferencesMock.mockReset()
     onProgressMock.mockReset()
+    setAutomaticMock.mockReset()
     Object.keys(listeners).forEach(k => delete listeners[k])
     checkMock.mockResolvedValue({
       supported: true,
@@ -567,14 +578,29 @@ describe('startUpdatePoller', () => {
       targetSha: 'sha-abc',
       fetchedAt: 0
     })
+    applyMock.mockResolvedValue({ ok: true, handedOff: true })
+    getPreferencesMock.mockResolvedValue({ automatic: false, branch: 'main' })
+    setAutomaticMock.mockImplementation(async (automatic: boolean) => ({ automatic, branch: 'main' }))
+    $automaticUpdatesEnabled.set(false)
+    $automaticUpdatesLoading.set(true)
+    $automaticUpdatesSaving.set(false)
     $updateStatus.set(null)
     ;(globalThis as unknown as { window: unknown }).window = {
-      hermesDesktop: { updates: { check: checkMock, onProgress: onProgressMock } },
+      hermesDesktop: {
+        updates: {
+          apply: applyMock,
+          check: checkMock,
+          getPreferences: getPreferencesMock,
+          onProgress: onProgressMock,
+          setAutomatic: setAutomaticMock
+        }
+      },
       addEventListener: vi.fn((event: string, handler: Function) => {
         listeners[event] = handler
       }),
       removeEventListener: vi.fn()
     }
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
     vi.useFakeTimers()
     stopUpdatePoller()
   })
@@ -582,6 +608,7 @@ describe('startUpdatePoller', () => {
   afterEach(() => {
     stopUpdatePoller()
     delete (globalThis as unknown as { window?: unknown }).window
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
     vi.useRealTimers()
   })
 
@@ -593,6 +620,28 @@ describe('startUpdatePoller', () => {
 
     expect(checkMock).toHaveBeenCalled()
     expect($updateStatus.get()?.behind).toBe(5)
+  })
+
+  it('hydrates and persists the automatic-update preference through Electron', async () => {
+    getPreferencesMock.mockResolvedValue({ automatic: true, branch: 'main' })
+
+    expect(await refreshAutomaticUpdatePreference()).toBe(true)
+    expect($automaticUpdatesEnabled.get()).toBe(true)
+    expect($automaticUpdatesLoading.get()).toBe(false)
+
+    expect(await setAutomaticUpdatesEnabled(false)).toBe(false)
+    expect(setAutomaticMock).toHaveBeenCalledWith(false)
+    expect($automaticUpdatesEnabled.get()).toBe(false)
+  })
+
+  it('installs an available update automatically only while the window is inactive', async () => {
+    getPreferencesMock.mockResolvedValue({ automatic: true, branch: 'main' })
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
+
+    startUpdatePoller()
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(applyMock).toHaveBeenCalledTimes(1)
   })
 
   it('calls checkUpdates() on each interval tick', async () => {

@@ -276,6 +276,8 @@ declare global {
       updates: {
         check: () => Promise<DesktopUpdateStatus>
         apply: (opts?: DesktopUpdateApplyOptions) => Promise<DesktopUpdateApplyResult>
+        getPreferences: () => Promise<DesktopUpdatePreferences>
+        setAutomatic: (enabled: boolean) => Promise<DesktopUpdatePreferences>
         getBranch: () => Promise<{ branch: string }>
         setBranch: (name: string) => Promise<{ branch: string }>
         onProgress: (callback: (payload: DesktopUpdateProgress) => void) => () => void
@@ -392,6 +394,11 @@ export interface DesktopUpdateStatus {
   commits?: DesktopUpdateCommit[]
   dirty?: boolean
   fetchedAt?: number
+}
+
+export interface DesktopUpdatePreferences {
+  automatic: boolean
+  branch: string
 }
 
 export type DesktopUpdateDirtyStrategy = 'abort' | 'stash' | 'force'

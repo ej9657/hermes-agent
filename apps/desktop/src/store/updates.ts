@@ -47,6 +47,9 @@ export const $updateApply = atom<UpdateApplyState>(IDLE)
 export const $updateChecking = atom<boolean>(false)
 export const $updateOverlayOpen = atom<boolean>(false)
 export const $updateStatus = atom<DesktopUpdateStatus | null>(null)
+export const $automaticUpdatesEnabled = atom<boolean>(false)
+export const $automaticUpdatesLoading = atom<boolean>(true)
+export const $automaticUpdatesSaving = atom<boolean>(false)
 
 // Client and backend are independently updatable; each keeps its own state.
 export const $backendUpdateStatus = atom<DesktopUpdateStatus | null>(null)
@@ -384,6 +387,52 @@ export async function checkUpdates(): Promise<DesktopUpdateStatus | null> {
   }
 }
 
+export async function refreshAutomaticUpdatePreference(): Promise<boolean> {
+  const bridge = window.hermesDesktop?.updates
+
+  if (!bridge?.getPreferences) {
+    $automaticUpdatesLoading.set(false)
+
+    return false
+  }
+
+  try {
+    const preferences = await bridge.getPreferences()
+    $automaticUpdatesEnabled.set(preferences.automatic)
+
+    return preferences.automatic
+  } catch {
+    return $automaticUpdatesEnabled.get()
+  } finally {
+    $automaticUpdatesLoading.set(false)
+  }
+}
+
+export async function setAutomaticUpdatesEnabled(enabled: boolean): Promise<boolean> {
+  const bridge = window.hermesDesktop?.updates
+  const previous = $automaticUpdatesEnabled.get()
+
+  if (!bridge?.setAutomatic || $automaticUpdatesSaving.get()) {
+    return previous
+  }
+
+  $automaticUpdatesEnabled.set(enabled)
+  $automaticUpdatesSaving.set(true)
+
+  try {
+    const preferences = await bridge.setAutomatic(enabled)
+    $automaticUpdatesEnabled.set(preferences.automatic)
+
+    return preferences.automatic
+  } catch {
+    $automaticUpdatesEnabled.set(previous)
+
+    return previous
+  } finally {
+    $automaticUpdatesSaving.set(false)
+  }
+}
+
 export async function applyUpdates(opts: DesktopUpdateApplyOptions = {}): Promise<DesktopUpdateApplyResult> {
   const bridge = window.hermesDesktop?.updates
 
@@ -665,6 +714,43 @@ let lastFocusAt = 0
 let connectionUnsub: (() => void) | null = null
 let lastConnectionMode: string | undefined
 
+function canApplyAutomaticUpdate(
+  status: DesktopUpdateStatus | null,
+  enabled = $automaticUpdatesEnabled.get()
+): boolean {
+  return (
+    enabled &&
+    document.visibilityState !== 'visible' &&
+    Boolean(status) &&
+    status?.supported !== false &&
+    !status?.error &&
+    (status?.behind ?? 0) > 0 &&
+    !$updateApply.get().applying
+  )
+}
+
+async function collectUpdateStatus(): Promise<DesktopUpdateStatus | null> {
+  const [status] = await Promise.all([checkUpdates(), checkBackendUpdates(), refreshDesktopVersion()])
+
+  return status
+}
+
+async function runBackgroundUpdateCycle(): Promise<void> {
+  const status = await collectUpdateStatus()
+
+  if (canApplyAutomaticUpdate(status)) {
+    await applyUpdates()
+  }
+}
+
+async function initializeUpdatePoller(): Promise<void> {
+  const [automatic, status] = await Promise.all([refreshAutomaticUpdatePreference(), collectUpdateStatus()])
+
+  if (canApplyAutomaticUpdate(status, automatic)) {
+    await applyUpdates()
+  }
+}
+
 /** Wire up background polling + progress streaming. Idempotent. */
 export function startUpdatePoller(): void {
   if (pollerStarted || typeof window === 'undefined') {
@@ -678,9 +764,7 @@ export function startUpdatePoller(): void {
   }
 
   pollerStarted = true
-  void checkUpdates()
-  void checkBackendUpdates()
-  void refreshDesktopVersion()
+  void initializeUpdatePoller()
   bridge.onProgress(ingestProgress)
 
   // The poller starts at mount, before the gateway connects — so the first
@@ -699,10 +783,10 @@ export function startUpdatePoller(): void {
   })
 
   window.addEventListener('focus', onFocus)
+  document.addEventListener('visibilitychange', onVisibilityChange)
   backgroundTimer = setInterval(
     () => {
-      void checkUpdates()
-      void checkBackendUpdates()
+      void runBackgroundUpdateCycle()
     },
     30 * 60 * 1000
   )
@@ -718,7 +802,14 @@ export function stopUpdatePoller(): void {
   connectionUnsub = null
   lastConnectionMode = undefined
   window.removeEventListener('focus', onFocus)
+  document.removeEventListener('visibilitychange', onVisibilityChange)
   pollerStarted = false
+}
+
+function onVisibilityChange() {
+  if (document.visibilityState !== 'visible') {
+    void runBackgroundUpdateCycle()
+  }
 }
 
 function onFocus() {

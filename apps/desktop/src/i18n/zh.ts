@@ -747,7 +747,7 @@ export const zh: Translations = {
       lastChecked: age => `上次检查:${age}`,
       justNowSuffix: ' · 刚刚',
       automaticUpdates: '自动更新',
-      automaticUpdatesDesc: 'Hermes 会在后台自动检查更新，并在有可用更新时通知你。',
+      automaticUpdatesDesc: '启用后，Hermes 会在后台检查更新，并在窗口非活动时自动安装。',
       branchCommit: (branch, commit) => `分支 ${branch} · 提交 ${commit}`,
       never: '从未',
       justNow: '刚刚',

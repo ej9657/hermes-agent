@@ -537,7 +537,7 @@ export const en: Translations = {
       justNowSuffix: ' · just now',
       automaticUpdates: 'Automatic updates',
       automaticUpdatesDesc:
-        'Hermes checks for updates automatically in the background and lets you know when one is ready.',
+        'When enabled, Hermes checks in the background and installs updates while the window is inactive.',
       branchCommit: (branch, commit) => `Branch ${branch} · Commit ${commit}`,
       never: 'never',
       justNow: 'just now',

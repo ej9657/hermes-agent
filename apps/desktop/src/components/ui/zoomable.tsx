@@ -2,7 +2,7 @@
 
 import { type ReactNode, useEffect, useState } from 'react'
 
-import { Dialog, DialogContent } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Tip } from '@/components/ui/tooltip'
 import { Check, Copy, Maximize, RefreshCw, X, ZoomIn, ZoomOut } from '@/lib/icons'
 import { cn } from '@/lib/utils'
@@ -35,9 +35,9 @@ export function Zoomable({ children, overlay, onCopy, label = 'Open full view', 
       <div className={cn('group/zoomable relative', className)}>
         {/* The whole content is the trigger — click anywhere to open, like an image. */}
         <button
+          aria-label={label}
           className="block w-full cursor-zoom-in text-left"
           onClick={() => setOpen(true)}
-          title={label}
           type="button"
         >
           {children}
@@ -50,7 +50,7 @@ export function Zoomable({ children, overlay, onCopy, label = 'Open full view', 
         </span>
       </div>
       {open && (
-        <ZoomPanViewer onCopy={onCopy} onOpenChange={setOpen} open={open}>
+        <ZoomPanViewer label={label} onCopy={onCopy} onOpenChange={setOpen} open={open}>
           {overlay ?? children}
         </ZoomPanViewer>
       )}
@@ -60,11 +60,13 @@ export function Zoomable({ children, overlay, onCopy, label = 'Open full view', 
 
 function ZoomPanViewer({
   children,
+  label,
   onCopy,
   onOpenChange,
   open
 }: {
   children: ReactNode
+  label: string
   onCopy?: () => Promise<void> | void
   onOpenChange: (open: boolean) => void
   open: boolean
@@ -83,6 +85,7 @@ function ZoomPanViewer({
         className="flex h-[85vh] w-[90vw] max-w-[90vw] flex-col gap-0 overflow-hidden p-0"
         showCloseButton={false}
       >
+        <DialogTitle className="sr-only">{label}</DialogTitle>
         <div
           className={cn(
             'relative flex-1 touch-none select-none overflow-hidden',

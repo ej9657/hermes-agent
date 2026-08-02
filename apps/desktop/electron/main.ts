@@ -187,6 +187,7 @@ import {
 } from './ssh-connection'
 import { createStreamThrottle } from './stream-throttle'
 import { nativeOverlayWidth as computeNativeOverlayWidth, macTitleBarOverlayHeight } from './titlebar-overlay-width'
+import { normalizeDesktopUpdateConfig, patchDesktopUpdateConfig } from './update-config'
 import { resolveBehindCount, shouldCountCommits } from './update-count'
 import { waitForUpdateClearance } from './update-gate'
 import { readLiveUpdateMarker, updateHandoffConflict, writeUpdateMarker } from './update-marker'
@@ -2291,12 +2292,12 @@ function recentHermesLog() {
 
 function readDesktopUpdateConfig() {
   try {
-    const parsed = JSON.parse(fs.readFileSync(DESKTOP_UPDATE_CONFIG_PATH, 'utf8'))
-    const branch = typeof parsed?.branch === 'string' ? parsed.branch.trim() : ''
-
-    return { branch: branch || DEFAULT_UPDATE_BRANCH }
+    return normalizeDesktopUpdateConfig(
+      JSON.parse(fs.readFileSync(DESKTOP_UPDATE_CONFIG_PATH, 'utf8')),
+      DEFAULT_UPDATE_BRANCH
+    )
   } catch {
-    return { branch: DEFAULT_UPDATE_BRANCH }
+    return normalizeDesktopUpdateConfig(null, DEFAULT_UPDATE_BRANCH)
   }
 }
 
@@ -11402,9 +11403,24 @@ ipcMain.handle('hermes:updates:branch:get', async () => readDesktopUpdateConfig(
 
 ipcMain.handle('hermes:updates:branch:set', async (_event, name) => {
   const branch = typeof name === 'string' && name.trim() ? name.trim() : DEFAULT_UPDATE_BRANCH
-  writeDesktopUpdateConfig({ branch })
+  const config = patchDesktopUpdateConfig(readDesktopUpdateConfig(), { branch }, DEFAULT_UPDATE_BRANCH)
+  writeDesktopUpdateConfig(config)
 
-  return { branch }
+  return config
+})
+
+ipcMain.handle('hermes:updates:preferences:get', async () => readDesktopUpdateConfig())
+
+ipcMain.handle('hermes:updates:automatic:set', async (_event, enabled) => {
+  const config = patchDesktopUpdateConfig(
+    readDesktopUpdateConfig(),
+    { automatic: enabled === true },
+    DEFAULT_UPDATE_BRANCH
+  )
+
+  writeDesktopUpdateConfig(config)
+
+  return config
 })
 
 // Resolve the canonical Hermes version (the one `release.py` bumps in

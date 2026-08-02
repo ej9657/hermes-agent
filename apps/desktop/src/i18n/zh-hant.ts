@@ -623,7 +623,7 @@ export const zhHant = defineLocale({
       lastChecked: age => `上次檢查：${age}`,
       justNowSuffix: ' · 剛剛',
       automaticUpdates: '自動更新',
-      automaticUpdatesDesc: 'Hermes 會在背景自動檢查更新，並在有可用更新時通知你。',
+      automaticUpdatesDesc: '啟用後，Hermes 會在背景檢查更新，並在視窗非使用中時自動安裝。',
       branchCommit: (branch, commit) => `分支 ${branch} · 提交 ${commit}`,
       never: '從未',
       justNow: '剛剛',

@@ -2,7 +2,7 @@
 
 import { type ComponentProps, useState } from 'react'
 
-import { Dialog, DialogContent } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { useImageDownload } from '@/hooks/use-image-download'
 import { useI18n } from '@/i18n'
 import { Download } from '@/lib/icons'
@@ -15,6 +15,7 @@ export interface ZoomableImageProps extends ComponentProps<'img'> {
 
 export interface ImageActionCopy {
   downloadImage: string
+  openImage: string
   savingImage: string
 }
 
@@ -32,10 +33,10 @@ export function ZoomableImage({ className, containerClassName, src, alt, slot, .
         data-slot={slot ?? 'aui_zoomable-image'}
       >
         <button
+          aria-label={canOpen ? copy.openImage : undefined}
           className="contents"
           disabled={!canOpen}
           onClick={() => canOpen && setLightboxOpen(true)}
-          title={canOpen ? copy.openImage : undefined}
           type="button"
         >
           <img alt={alt ?? ''} className={className} src={src} {...props} />
@@ -82,6 +83,7 @@ export function ImageLightbox({
         className="block w-auto max-h-[calc(100vh-12rem)] max-w-[calc(100vw-12rem)] overflow-visible border-0 bg-transparent p-0 shadow-none"
         showCloseButton={false}
       >
+        <DialogTitle className="sr-only">{alt || copy.openImage}</DialogTitle>
         <div className="group/lightbox relative inline-block">
           <img
             alt={alt ?? ''}
