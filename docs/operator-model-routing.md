@@ -18,7 +18,7 @@ hermes codex-review
 ```
 
 The helper shells out to the local `claude -p` CLI, defaults to
-`claude-opus-4-8`, and uses the operator's existing Claude Code login. It does
+`claude-opus-5`, and uses the operator's existing Claude Code login. It does
 not route through Hermes' `provider: anthropic` adapter and does not require an
 `ANTHROPIC_API_KEY`.
 

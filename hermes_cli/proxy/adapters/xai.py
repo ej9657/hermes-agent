@@ -24,6 +24,8 @@ _ALLOWED_PATHS: FrozenSet[str] = frozenset(
         "/completions",
         "/embeddings",
         "/models",
+        "/images/generations",
+        "/images/edits",
     }
 )
 
